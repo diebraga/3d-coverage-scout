@@ -161,8 +161,13 @@ extension ARSessionManager {
 
         let scnGeometry = SCNGeometry(from: geometry, replacingColorWith: colorSource)
         node.geometry = scnGeometry
-        scnGeometry.firstMaterial?.lightingModel = .constant
-        scnGeometry.firstMaterial?.isDoubleSided = true
+        let material = scnGeometry.firstMaterial ?? SCNMaterial()
+        material.lightingModel = .constant
+        material.isDoubleSided = true
+        material.transparency = 1.0
+        material.blendMode = .alpha
+        material.isOpaque = false
+        scnGeometry.firstMaterial = material
     }
 }
 
