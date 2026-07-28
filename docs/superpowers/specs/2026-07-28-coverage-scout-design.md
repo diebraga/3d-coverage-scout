@@ -23,7 +23,8 @@ app is strictly less work than reimplementing tracking in a browser.
 
 ## Architecture
 
-- SwiftUI app, single screen.
+- SwiftUI app, two screens: an idle start screen and the live AR/recording
+  screen (see "Screen flow" below).
 - `ARSession` with `ARWorldTrackingConfiguration`, `sceneReconstruction = .mesh`
   (LiDAR scene mesh) and `.smoothedSceneDepth` if available for more stable
   per-point ranges.
@@ -84,16 +85,25 @@ The live camera feed is shown with the ARKit mesh overlaid as translucent
 colored triangles (looked up per-vertex against its containing voxel's
 current color). A small HUD shows the live quality percentage.
 
-## Recording & output
+## Screen flow
 
-Single **Start/Stop** button, matching Scaniverse's own UX:
-- **Start** — begins the AR coverage session and video recording together.
-- **Stop** — ends both; the recorded `.mov` (no overlay baked in) saves to
-  the Photos library, same as any normal camera recording.
+1. **Idle start screen** — no camera preview yet. Just a red circular button
+   with a "+" in the middle, labeled "Start Recording". The AR session isn't
+   created until this is tapped (keeps the idle screen trivial and avoids
+   burning battery/camera access before the user is ready).
+2. Tapping it creates the `ARSession`, presents the live camera + colorized
+   coverage overlay + quality-% HUD (see Rendering above), and immediately
+   starts recording — one tap, no separate confirm step. The same button
+   (now a stop icon) is the only way to end the session.
+3. Tapping again stops both the AR session and the recording, writes the
+   `.mov` to the Photos library, tears down the AR session, and returns
+   straight to the idle start screen (screen 1) with a brief "Saved" toast/
+   checkmark — ready to immediately start another take.
 
-No custom transfer mechanism — the user AirDrops the saved video to their Mac
-and drops it into `<house>/<room>/raw/` exactly as they already do today per
-the existing pipeline's step 0. Nothing about the existing pipeline changes.
+No custom transfer mechanism beyond saving to Photos — the user AirDrops the
+saved video to their Mac and drops it into `<house>/<room>/raw/` exactly as
+they already do today per the existing pipeline's step 0. Nothing about the
+existing pipeline changes.
 
 ## Error handling
 
