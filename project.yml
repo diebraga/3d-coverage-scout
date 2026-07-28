@@ -1,0 +1,26 @@
+name: CoverageScout
+options:
+  bundleIdPrefix: com.diebraga
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  CoverageScout:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSCameraUsageDescription: "Coverage Scout uses the camera to scan rooms and show live coverage feedback."
+        NSPhotoLibraryAddUsageDescription: "Coverage Scout saves your scan recordings to your Photos library."
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+  CoverageScoutTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: CoverageScout

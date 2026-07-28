@@ -36,3 +36,4 @@ across sessions; the spec has the actual design.
 - **Camera is exclusively locked to one session at a time** — recording
   reuses the running `ARSession`'s own frames (`ARFrame.capturedImage`)
   rather than opening a second `AVCaptureSession`.
+- **`CoverageScout.xcodeproj` is generated, not committed.** Run `xcodegen generate` once after cloning (or after editing `project.yml`) before opening the project in Xcode.
