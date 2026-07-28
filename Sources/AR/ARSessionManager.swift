@@ -192,7 +192,6 @@ extension ARSessionManager {
         material.isDoubleSided = true
         material.transparency = 1.0
         material.blendMode = .alpha
-        material.isOpaque = false
         scnGeometry.firstMaterial = material
     }
 }

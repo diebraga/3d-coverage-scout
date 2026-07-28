@@ -1,4 +1,5 @@
 import XCTest
+import simd
 @testable import CoverageScout
 
 final class VoxelGridTests: XCTestCase {

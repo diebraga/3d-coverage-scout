@@ -90,7 +90,7 @@ struct ContentView: View {
                         let width = CVPixelBufferGetWidth(pixelBuffer)
                         let height = CVPixelBufferGetHeight(pixelBuffer)
                         do {
-                            try self.recorder.startRecording(width: width, height: height)
+                            _ = try self.recorder.startRecording(width: width, height: height)
                         } catch {
                             DispatchQueue.main.async {
                                 self.didFailToSaveVideo = true
