@@ -35,3 +35,8 @@
 - `git show --check HEAD` passed.
 - `swiftc -parse Sources/AR/ARSessionManager.swift Sources/ContentView.swift` passed.
 - Full Xcode build was not run because the full Xcode/iOS SDK is unavailable on this Mac.
+
+## Task 8 Completion Boundary Fix
+
+- Kept the UI out of idle until asynchronous `VideoRecorder.stopRecording` completion runs, preventing a new scan from starting while the shared recorder is still finalizing.
+- Added a stopping guard for repeated stop actions and surfaced recording-start failures through the existing failure toast state.

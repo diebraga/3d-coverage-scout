@@ -36,6 +36,7 @@ struct ContentView: View {
     }
 
     @State private var screen: Screen = .idle
+    @State private var isStopping = false
     @State private var didSaveVideo = false
     @State private var didFailToSaveVideo = false
     @StateObject private var sessionManager = ARSessionManager()
@@ -88,7 +89,13 @@ struct ContentView: View {
                     if !self.recorder.isRecording {
                         let width = CVPixelBufferGetWidth(pixelBuffer)
                         let height = CVPixelBufferGetHeight(pixelBuffer)
-                        _ = try? self.recorder.startRecording(width: width, height: height)
+                        do {
+                            try self.recorder.startRecording(width: width, height: height)
+                        } catch {
+                            DispatchQueue.main.async {
+                                self.didFailToSaveVideo = true
+                            }
+                        }
                     }
                     self.recorder.appendFrame(pixelBuffer, timestamp: timestamp)
                 }
@@ -99,13 +106,19 @@ struct ContentView: View {
     }
 
     private func stopScan() {
+        guard !isStopping else { return }
+        isStopping = true
         sessionManager.stop()
         recorderGate.end()
         sessionManager.onFrameCaptured = nil
 
         // ponytail: one serial queue protects the single recorder; split it only if recording throughput requires it.
-        recorderQueue.sync {
+        recorderQueue.async {
             recorder.stopRecording { result in
+                DispatchQueue.main.async {
+                    self.isStopping = false
+                    self.screen = .idle
+                }
                 guard case .success(let url) = result else {
                     DispatchQueue.main.async {
                         self.didFailToSaveVideo = true
@@ -129,7 +142,6 @@ struct ContentView: View {
                 }
             }
         }
-        screen = .idle
     }
 }
 
