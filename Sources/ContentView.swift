@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreVideo
+import AudioToolbox
 
 struct ContentView: View {
     private enum Screen {
@@ -36,6 +37,7 @@ struct ContentView: View {
     }
 
     @State private var screen: Screen = .idle
+    @State private var isRecording = false
     @State private var isStopping = false
     @State private var didSaveVideo = false
     @State private var didFailToSaveVideo = false
@@ -48,9 +50,9 @@ struct ContentView: View {
         Group {
             switch screen {
             case .idle:
-                IdleStartView(onStart: startScan)
+                IdleStartView(onStart: openCamera)
             case .scanning:
-                ARCoverageScreen(sessionManager: sessionManager, onStop: stopScan)
+                ARCoverageScreen(sessionManager: sessionManager, isRecording: isRecording, onToggleRecording: toggleRecording)
             }
         }
         .overlay(alignment: .top) {
@@ -78,10 +80,23 @@ struct ContentView: View {
         }
     }
 
-    private func startScan() {
+    private func openCamera() {
         guard sessionManager.isLiDARSupported else { return }
         didSaveVideo = false
         didFailToSaveVideo = false
+        sessionManager.start()
+        screen = .scanning
+    }
+
+    private func toggleRecording() {
+        if isRecording {
+            stopRecording()
+        } else {
+            beginRecording()
+        }
+    }
+
+    private func beginRecording() {
         let scanGeneration = recorderGate.begin()
         sessionManager.onFrameCaptured = { pixelBuffer, timestamp in
             self.recorderGate.withAcceptedFrame(for: scanGeneration) {
@@ -101,13 +116,16 @@ struct ContentView: View {
                 }
             }
         }
-        sessionManager.start()
-        screen = .scanning
+        isRecording = true
+        // ponytail: well-known system sound ID matching the Camera app's own
+        // begin-recording chime; swap the ID if it doesn't sound right on-device.
+        AudioServicesPlaySystemSound(1117)
     }
 
-    private func stopScan() {
+    private func stopRecording() {
         guard !isStopping else { return }
         isStopping = true
+        isRecording = false
         sessionManager.stop()
         recorderGate.end()
         sessionManager.onFrameCaptured = nil

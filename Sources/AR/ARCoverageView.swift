@@ -10,7 +10,8 @@ struct ARCoverageView: UIViewRepresentable {
 
 struct ARCoverageScreen: View {
     @ObservedObject var sessionManager: ARSessionManager
-    let onStop: () -> Void
+    let isRecording: Bool
+    let onToggleRecording: () -> Void
 
     var body: some View {
         Group {
@@ -18,6 +19,7 @@ struct ARCoverageScreen: View {
                 ZStack(alignment: .top) {
                     ARCoverageView(sceneView: sessionManager.sceneView)
                         .ignoresSafeArea()
+                        .overlay(Color.black.opacity(0.12).ignoresSafeArea())
 
                     VStack {
                         if let message = sessionManager.trackingMessage {
@@ -34,15 +36,17 @@ struct ARCoverageScreen: View {
                             .foregroundColor(.white)
                             .cornerRadius(8)
                         Spacer()
-                        Button(action: onStop) {
+                        Button(action: onToggleRecording) {
                             ZStack {
                                 Circle().fill(Color.red).frame(width: 88, height: 88)
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.white)
-                                    .frame(width: 28, height: 28)
+                                if isRecording {
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color.white)
+                                        .frame(width: 28, height: 28)
+                                }
                             }
                         }
-                        .accessibilityLabel("Stop Recording")
+                        .accessibilityLabel(isRecording ? "Stop Recording" : "Start Recording")
                         .padding(.bottom, 32)
                     }
                 }

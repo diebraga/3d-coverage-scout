@@ -9,6 +9,16 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     private let frameCaptureLock = NSLock()
     private var frameCaptureHandler: ((CVPixelBuffer, CMTime) -> Void)?
 
+    // Both dictionaries below are touched only from their single respective delegate
+    // callback (ARSessionDelegate.didUpdate for the first, the SCNSceneRendererDelegate
+    // pair for the second), each invoked serially by ARKit/SceneKit — no lock needed.
+    // ponytail: per-anchor throttling, not per-vertex — bounds cost as anchor count grows
+    // without capping how fresh a freshly-discovered anchor's first render is.
+    private var lastObservationTime: [UUID: TimeInterval] = [:]
+    private let minObservationInterval: TimeInterval = 0.1
+    private var lastRebuildTime: [UUID: TimeInterval] = [:]
+    private let minRebuildInterval: TimeInterval = 0.15
+
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
     @Published var isLiDARSupported: Bool = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
@@ -64,8 +74,12 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
             frame.camera.transform.columns.3.z
         )
 
+        let now = Date().timeIntervalSince1970
         for anchor in frame.anchors {
             guard let meshAnchor = anchor as? ARMeshAnchor else { continue }
+            let last = lastObservationTime[meshAnchor.identifier] ?? 0
+            guard now - last >= minObservationInterval else { continue }
+            lastObservationTime[meshAnchor.identifier] = now
             recordObservations(for: meshAnchor, cameraPosition: cameraPosition)
         }
 
@@ -158,6 +172,14 @@ extension ARSessionManager {
     }
 
     private func updateGeometry(node: SCNNode, meshAnchor: ARMeshAnchor) {
+        let now = Date().timeIntervalSince1970
+        if let last = lastRebuildTime[meshAnchor.identifier], now - last < minRebuildInterval {
+            // Skip this tick — the node keeps rendering its last-built geometry, so
+            // nothing disappears, it just doesn't rebuild faster than minRebuildInterval.
+            return
+        }
+        lastRebuildTime[meshAnchor.identifier] = now
+
         let geometry = meshAnchor.geometry
         let vertexSource = geometry.vertices
         let transform = meshAnchor.transform

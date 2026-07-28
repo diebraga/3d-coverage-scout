@@ -16,8 +16,8 @@ struct IdleStartView: View {
                         .foregroundColor(.white)
                 }
             }
-            .accessibilityLabel("Start Recording")
-            Text("Start Recording")
+            .accessibilityLabel("Start Scan")
+            Text("Start Scan")
                 .font(.headline)
             Spacer()
         }
