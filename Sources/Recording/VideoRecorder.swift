@@ -41,7 +41,7 @@ final class VideoRecorder {
 
         guard writer.canAdd(input) else { throw RecorderError.writerSetupFailed }
         writer.add(input)
-        writer.startWriting()
+        guard writer.startWriting() else { throw RecorderError.writerSetupFailed }
 
         assetWriter = writer
         videoInput = input
