@@ -10,6 +10,29 @@ struct ContentView: View {
     private final class RecorderGate {
         let lock = NSLock()
         var acceptsFrames = false
+        var generation: UInt64 = 0
+
+        func begin() -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            generation &+= 1
+            acceptsFrames = true
+            return generation
+        }
+
+        func end() {
+            lock.lock()
+            acceptsFrames = false
+            generation &+= 1
+            lock.unlock()
+        }
+
+        func withAcceptedFrame(for generation: UInt64, _ operation: () -> Void) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard acceptsFrames, self.generation == generation else { return }
+            operation()
+        }
     }
 
     @State private var screen: Screen = .idle
@@ -58,24 +81,18 @@ struct ContentView: View {
         guard sessionManager.isLiDARSupported else { return }
         didSaveVideo = false
         didFailToSaveVideo = false
-        recorderGate.lock.lock()
-        recorderGate.acceptsFrames = true
-        recorderGate.lock.unlock()
+        let scanGeneration = recorderGate.begin()
         sessionManager.onFrameCaptured = { pixelBuffer, timestamp in
-            self.recorderGate.lock.lock()
-            guard self.recorderGate.acceptsFrames else {
-                self.recorderGate.lock.unlock()
-                return
-            }
-            self.recorderQueue.async {
-                if !self.recorder.isRecording {
-                    let width = CVPixelBufferGetWidth(pixelBuffer)
-                    let height = CVPixelBufferGetHeight(pixelBuffer)
-                    _ = try? self.recorder.startRecording(width: width, height: height)
+            self.recorderGate.withAcceptedFrame(for: scanGeneration) {
+                self.recorderQueue.async {
+                    if !self.recorder.isRecording {
+                        let width = CVPixelBufferGetWidth(pixelBuffer)
+                        let height = CVPixelBufferGetHeight(pixelBuffer)
+                        _ = try? self.recorder.startRecording(width: width, height: height)
+                    }
+                    self.recorder.appendFrame(pixelBuffer, timestamp: timestamp)
                 }
-                self.recorder.appendFrame(pixelBuffer, timestamp: timestamp)
             }
-            self.recorderGate.lock.unlock()
         }
         sessionManager.start()
         screen = .scanning
@@ -83,10 +100,8 @@ struct ContentView: View {
 
     private func stopScan() {
         sessionManager.stop()
-        recorderGate.lock.lock()
-        recorderGate.acceptsFrames = false
+        recorderGate.end()
         sessionManager.onFrameCaptured = nil
-        recorderGate.lock.unlock()
 
         // ponytail: one serial queue protects the single recorder; split it only if recording throughput requires it.
         recorderQueue.sync {
@@ -105,9 +120,11 @@ struct ContentView: View {
                         return
                     }
                     try? FileManager.default.removeItem(at: url)
-                    didSaveVideo = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        didSaveVideo = false
+                    DispatchQueue.main.async {
+                        self.didSaveVideo = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            self.didSaveVideo = false
+                        }
                     }
                 }
             }

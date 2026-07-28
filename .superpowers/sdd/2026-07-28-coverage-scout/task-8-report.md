@@ -22,3 +22,16 @@
 ## Commit
 
 - `cf849cb Wire idle and AR screens together with recording lifecycle`
+
+## Remaining Lifecycle Race Fixes
+
+- Synchronized `ARSessionManager.onFrameCaptured` registration and callback snapshotting with an internal lock, so AR delegate reads cannot race `ContentView` registration or removal.
+- Replaced the shared Boolean recorder gate with a lock-protected per-scan generation token. Callback queue submission remains inside the gate lock, and stale callbacks from an earlier scan are rejected after a fast restart.
+- Moved the successful Photos-save `didSaveVideo` state mutation and its reset onto the main queue.
+
+## Verification
+
+- `git diff --check` passed.
+- `git show --check HEAD` passed.
+- `swiftc -parse Sources/AR/ARSessionManager.swift Sources/ContentView.swift` passed.
+- Full Xcode build was not run because the full Xcode/iOS SDK is unavailable on this Mac.

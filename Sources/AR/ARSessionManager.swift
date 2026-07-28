@@ -6,12 +6,25 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     let sceneView = ARSCNView()
     let voxelGrid = VoxelGrid()
     private let voxelGridLock = NSLock()
+    private let frameCaptureLock = NSLock()
+    private var frameCaptureHandler: ((CVPixelBuffer, CMTime) -> Void)?
 
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
     @Published var isLiDARSupported: Bool = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
 
-    var onFrameCaptured: ((CVPixelBuffer, CMTime) -> Void)?
+    var onFrameCaptured: ((CVPixelBuffer, CMTime) -> Void)? {
+        get {
+            frameCaptureLock.lock()
+            defer { frameCaptureLock.unlock() }
+            return frameCaptureHandler
+        }
+        set {
+            frameCaptureLock.lock()
+            frameCaptureHandler = newValue
+            frameCaptureLock.unlock()
+        }
+    }
 
     override init() {
         super.init()
@@ -42,7 +55,8 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        onFrameCaptured?(frame.capturedImage, frame.timestamp.isNaN ? CMTime.zero : CMTime(seconds: frame.timestamp, preferredTimescale: 600))
+        let timestamp = frame.timestamp.isNaN ? CMTime.zero : CMTime(seconds: frame.timestamp, preferredTimescale: 600)
+        onFrameCaptured?(frame.capturedImage, timestamp)
 
         let cameraPosition = SIMD3<Float>(
             frame.camera.transform.columns.3.x,
