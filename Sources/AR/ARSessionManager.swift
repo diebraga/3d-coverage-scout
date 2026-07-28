@@ -5,6 +5,7 @@ import Combine
 final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARSessionDelegate {
     let sceneView = ARSCNView()
     let voxelGrid = VoxelGrid()
+    private let voxelGridLock = NSLock()
 
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
@@ -55,7 +56,8 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         }
 
         DispatchQueue.main.async { [weak self] in
-            self?.qualityPercentage = self?.voxelGrid.qualityPercentage ?? 0
+            guard let self else { return }
+            self.qualityPercentage = self.withVoxelGridLock { self.voxelGrid.qualityPercentage }
         }
     }
 
@@ -87,28 +89,36 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     // MARK: - Mesh -> voxel grid
 
     private func recordObservations(for meshAnchor: ARMeshAnchor, cameraPosition: SIMD3<Float>) {
-        let geometry = meshAnchor.geometry
-        let vertices = geometry.vertices
-        let normals = geometry.normals
-        let transform = meshAnchor.transform
-        // Sample a subset of vertices per update to bound per-frame cost on a dense mesh.
-        let stride = max(1, vertices.count / 500)
+        withVoxelGridLock {
+            let geometry = meshAnchor.geometry
+            let vertices = geometry.vertices
+            let normals = geometry.normals
+            let transform = meshAnchor.transform
+            // Sample a subset of vertices per update to bound per-frame cost on a dense mesh.
+            let stride = max(1, vertices.count / 500)
 
-        for i in Swift.stride(from: 0, to: vertices.count, by: stride) {
-            let localPosition = vertices[i]
-            let localNormal = normals[i]
-            let worldPosition4 = transform * SIMD4<Float>(localPosition, 1)
-            let worldPosition = SIMD3<Float>(worldPosition4.x, worldPosition4.y, worldPosition4.z)
-            let worldNormal = simd_normalize(
-                SIMD3<Float>(
-                    transform.columns.0.x * localNormal.x + transform.columns.1.x * localNormal.y + transform.columns.2.x * localNormal.z,
-                    transform.columns.0.y * localNormal.x + transform.columns.1.y * localNormal.y + transform.columns.2.y * localNormal.z,
-                    transform.columns.0.z * localNormal.x + transform.columns.1.z * localNormal.y + transform.columns.2.z * localNormal.z
+            for i in Swift.stride(from: 0, to: vertices.count, by: stride) {
+                let localPosition = vertices[i]
+                let localNormal = normals[i]
+                let worldPosition4 = transform * SIMD4<Float>(localPosition, 1)
+                let worldPosition = SIMD3<Float>(worldPosition4.x, worldPosition4.y, worldPosition4.z)
+                let worldNormal = simd_normalize(
+                    SIMD3<Float>(
+                        transform.columns.0.x * localNormal.x + transform.columns.1.x * localNormal.y + transform.columns.2.x * localNormal.z,
+                        transform.columns.0.y * localNormal.x + transform.columns.1.y * localNormal.y + transform.columns.2.y * localNormal.z,
+                        transform.columns.0.z * localNormal.x + transform.columns.1.z * localNormal.y + transform.columns.2.z * localNormal.z
+                    )
                 )
-            )
-            let observation = ObservationExtraction.observation(surfacePosition: worldPosition, surfaceNormal: worldNormal, cameraPosition: cameraPosition)
-            voxelGrid.recordObservation(observation, at: worldPosition)
+                let observation = ObservationExtraction.observation(surfacePosition: worldPosition, surfaceNormal: worldNormal, cameraPosition: cameraPosition)
+                voxelGrid.recordObservation(observation, at: worldPosition)
+            }
         }
+    }
+
+    private func withVoxelGridLock<T>(_ operation: () -> T) -> T {
+        voxelGridLock.lock()
+        defer { voxelGridLock.unlock() }
+        return operation()
     }
 }
 
@@ -140,11 +150,13 @@ extension ARSessionManager {
 
         var colors: [SCNVector4] = []
         colors.reserveCapacity(vertexSource.count)
-        for i in 0..<vertexSource.count {
-            let local = vertexSource[i]
-            let world4 = transform * SIMD4<Float>(local, 1)
-            let world = SIMD3<Float>(world4.x, world4.y, world4.z)
-            colors.append(color(for: voxelGrid.classification(at: world)))
+        withVoxelGridLock {
+            for i in 0..<vertexSource.count {
+                let local = vertexSource[i]
+                let world4 = transform * SIMD4<Float>(local, 1)
+                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                colors.append(color(for: voxelGrid.classification(at: world)))
+            }
         }
 
         let colorData = Data(bytes: colors, count: colors.count * MemoryLayout<SCNVector4>.stride)

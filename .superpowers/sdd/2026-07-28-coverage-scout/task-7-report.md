@@ -15,3 +15,8 @@ Verification:
 Concerns:
 
 - Device-only SceneKit material behavior and the LiDAR branch still need validation in the Task 9 physical-device check.
+
+Task 7 review fix:
+
+- Serialized all `VoxelGrid` access in `ARSessionManager` with a private `NSLock`, covering observation writes, renderer classification reads, and quality snapshots.
+- Verification: `git diff --check` passed; full Xcode/ARKit compile remains unavailable because this Mac has only Command Line Tools.
