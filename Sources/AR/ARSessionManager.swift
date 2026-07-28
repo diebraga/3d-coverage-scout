@@ -121,3 +121,71 @@ private extension ARGeometrySource {
         return pointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
     }
 }
+
+extension ARSessionManager {
+    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        updateGeometry(node: node, meshAnchor: meshAnchor)
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        updateGeometry(node: node, meshAnchor: meshAnchor)
+    }
+
+    private func updateGeometry(node: SCNNode, meshAnchor: ARMeshAnchor) {
+        let geometry = meshAnchor.geometry
+        let vertexSource = geometry.vertices
+        let transform = meshAnchor.transform
+
+        var colors: [SCNVector4] = []
+        colors.reserveCapacity(vertexSource.count)
+        for i in 0..<vertexSource.count {
+            let local = vertexSource[i]
+            let world4 = transform * SIMD4<Float>(local, 1)
+            let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+            colors.append(color(for: voxelGrid.classification(at: world)))
+        }
+
+        let colorData = Data(bytes: colors, count: colors.count * MemoryLayout<SCNVector4>.stride)
+        let colorSource = SCNGeometrySource(
+            data: colorData,
+            semantic: .color,
+            vectorCount: colors.count,
+            usesFloatComponents: true,
+            componentsPerVector: 4,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<SCNVector4>.stride
+        )
+
+        let scnGeometry = SCNGeometry(from: geometry, replacingColorWith: colorSource)
+        node.geometry = scnGeometry
+        scnGeometry.firstMaterial?.lightingModel = .constant
+        scnGeometry.firstMaterial?.isDoubleSided = true
+    }
+}
+
+private extension SCNGeometry {
+    convenience init(from meshGeometry: ARMeshGeometry, replacingColorWith colorSource: SCNGeometrySource) {
+        let vertexSource = SCNGeometrySource(
+            buffer: meshGeometry.vertices.buffer,
+            vertexFormat: meshGeometry.vertices.format,
+            semantic: .vertex,
+            vertexCount: meshGeometry.vertices.count,
+            dataOffset: meshGeometry.vertices.offset,
+            dataStride: meshGeometry.vertices.stride
+        )
+
+        let faces = meshGeometry.faces
+        let faceData = Data(bytes: faces.buffer.contents(), count: faces.buffer.length)
+        let element = SCNGeometryElement(
+            data: faceData,
+            primitiveType: .triangles,
+            primitiveCount: faces.count,
+            bytesPerIndex: faces.bytesPerIndex
+        )
+
+        self.init(sources: [vertexSource, colorSource], elements: [element])
+    }
+}
