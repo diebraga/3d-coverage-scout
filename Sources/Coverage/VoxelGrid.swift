@@ -6,6 +6,12 @@ struct VoxelCoordinate: Hashable {
     let z: Int32
 }
 
+struct VoxelOverlaySample: Hashable {
+    let coordinate: VoxelCoordinate
+    let center: SIMD3<Float>
+    let coverage: VoxelCoverage
+}
+
 final class VoxelGrid {
     static let voxelSize: Float = 0.1
 
@@ -43,9 +49,35 @@ final class VoxelGrid {
         classificationByVoxel[Self.coordinate(for: worldPosition)] ?? .gray
     }
 
+    func incompleteSamples(limit: Int, near cameraPosition: SIMD3<Float>) -> [VoxelOverlaySample] {
+        guard limit > 0 else { return [] }
+
+        return classificationByVoxel.compactMap { coordinate, coverage in
+            guard coverage != .green else { return nil }
+            return VoxelOverlaySample(
+                coordinate: coordinate,
+                center: Self.center(for: coordinate),
+                coverage: coverage
+            )
+        }
+        .sorted {
+            simd_distance_squared($0.center, cameraPosition) < simd_distance_squared($1.center, cameraPosition)
+        }
+        .prefix(limit)
+        .map { $0 }
+    }
+
     var qualityPercentage: Double {
         let total = greenCount + redCount
         guard total > 0 else { return 0 }
         return Double(greenCount) / Double(total) * 100
+    }
+
+    private static func center(for coordinate: VoxelCoordinate) -> SIMD3<Float> {
+        SIMD3<Float>(
+            (Float(coordinate.x) + 0.5) * voxelSize,
+            (Float(coordinate.y) + 0.5) * voxelSize,
+            (Float(coordinate.z) + 0.5) * voxelSize
+        )
     }
 }

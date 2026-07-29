@@ -56,4 +56,34 @@ final class VoxelGridTests: XCTestCase {
         let grid = VoxelGrid()
         XCTAssertEqual(grid.classification(at: SIMD3(9, 9, 9)), .gray)
     }
+
+    func test_incompleteSamples_returnsRedVoxel() {
+        let grid = VoxelGrid()
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: SIMD3(0, 0, 0))
+
+        let samples = grid.incompleteSamples(limit: 10, near: SIMD3(0, 0, 0))
+
+        XCTAssertEqual(samples.count, 1)
+        XCTAssertEqual(samples[0].coverage, .red)
+    }
+
+    func test_incompleteSamples_excludesGreenVoxel() {
+        let grid = VoxelGrid()
+        let position = SIMD3<Float>(0, 0, 0)
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: position)
+        grid.recordObservation(makeObservation(direction: SIMD3(1, 0, 1)), at: position)
+
+        XCTAssertTrue(grid.incompleteSamples(limit: 10, near: position).isEmpty)
+    }
+
+    func test_incompleteSamples_enforcesLimitAndSortsNearestFirst() {
+        let grid = VoxelGrid()
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: SIMD3(2, 0, 0))
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: SIMD3(0, 0, 0))
+
+        let samples = grid.incompleteSamples(limit: 1, near: SIMD3(0, 0, 0))
+
+        XCTAssertEqual(samples.count, 1)
+        XCTAssertEqual(samples[0].coordinate, VoxelGrid.coordinate(for: SIMD3(0, 0, 0)))
+    }
 }
