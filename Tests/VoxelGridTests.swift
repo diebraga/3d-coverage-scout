@@ -188,6 +188,7 @@ final class VoxelGridTests: XCTestCase {
     func test_previewOpacity_fadesAwayForConfirmedCoverage() {
         XCTAssertGreaterThan(ScanPreviewStyle.opacity(for: 0), 0)
         XCTAssertGreaterThan(ScanPreviewStyle.opacity(for: 0.5), 0)
+        XCTAssertGreaterThan(ScanPreviewStyle.opacity(for: 0.75), 0.2)
         XCTAssertLessThan(ScanPreviewStyle.opacity(for: 0.5), ScanPreviewStyle.opacity(for: 0))
         XCTAssertEqual(ScanPreviewStyle.opacity(for: 1), 0)
     }

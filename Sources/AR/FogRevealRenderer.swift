@@ -6,7 +6,7 @@ import UIKit
 /// keep the camera readable; unlike mesh faces, they cannot blanket objects.
 enum FogRevealRenderer {
     static let meshRenderingOrder = 0
-    private static let maximumPointsPerAnchor = 700
+    private static let maximumPointsPerAnchor = 1_500
 
     /// Builds a bounded point preview for one mesh anchor. `confidences` is
     /// resolved by the caller so the voxel-grid lock only covers dictionary reads.
@@ -25,7 +25,7 @@ enum FogRevealRenderer {
             guard alpha > 0 else { continue }
             let pointer = baseAddress.advanced(by: vertices.offset + vertices.stride * index)
             positions.append(pointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
-            colors.append(SCNVector4(1, 1, 1, alpha))
+            colors.append(SCNVector4(1, 0.05, 0.05, alpha))
         }
 
         guard !positions.isEmpty else { return SCNGeometry() }
@@ -60,14 +60,14 @@ enum FogRevealRenderer {
             primitiveCount: positions.count,
             bytesPerIndex: 0
         )
-        element.pointSize = 0.025
-        element.minimumPointScreenSpaceRadius = 1
-        element.maximumPointScreenSpaceRadius = 4
+        element.pointSize = 0.035
+        element.minimumPointScreenSpaceRadius = 2
+        element.maximumPointScreenSpaceRadius = 8
 
         let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
 
         let material = SCNMaterial()
-        material.diffuse.contents = UIColor.white
+        material.diffuse.contents = UIColor.red
         material.lightingModel = .constant
         material.blendMode = .alpha
         material.readsFromDepthBuffer = true
