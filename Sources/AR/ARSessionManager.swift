@@ -10,7 +10,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     let voxelGrid = VoxelGrid()
     private let voxelGridLock = NSLock()
     private let frameCaptureLock = NSLock()
-    private let coverageOverlayRenderer = FrostedCoverageOverlayRenderer()
+    private var didAttachFogPlane = false
     // Confirmed by a real device crash log: ARSCNView defaults ARSessionDelegate
     // callbacks to the main thread unless given an explicit queue. Any per-frame
     // cost there (mesh sampling, voxel recording) risks blocking the UI long
@@ -23,8 +23,19 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     // on sessionDelegateQueue (a serial queue) — still one-at-a-time, just off main.
     private var lastObservationTime: [UUID: TimeInterval] = [:]
     private let minObservationInterval: TimeInterval = 0.1
-    private var lastOverlayRefresh: TimeInterval = 0
-    private let minOverlayRefreshInterval: TimeInterval = 0.25
+
+    // Touched only from the SCNSceneRendererDelegate callbacks, which SceneKit
+    // invokes serially on its own render thread — never main, never the session
+    // queue, so these need no lock of their own.
+    private var lastMeshRebuild: [UUID: TimeInterval] = [:]
+    private let minMeshRebuildInterval: TimeInterval = 0.3
+    // Second, global bound on top of the per-anchor throttle: with enough
+    // anchors in a large room the per-anchor limit alone still allows a lot of
+    // rebuilds per second. Rebuilds are off the main thread, but keeping the
+    // total bounded is what stops this path ever becoming the next stall.
+    private var meshRebuildsInWindow = 0
+    private var meshRebuildWindowStart: TimeInterval = 0
+    private let maxMeshRebuildsPerSecond = 8
 
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
@@ -49,7 +60,6 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         sceneView.session.delegate = self
         sceneView.session.delegateQueue = sessionDelegateQueue
         sceneView.automaticallyUpdatesLighting = true
-        sceneView.scene.rootNode.addChildNode(coverageOverlayRenderer.rootNode)
     }
 
     func start() {
@@ -85,8 +95,6 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
             lastObservationTime[meshAnchor.identifier] = now
             recordObservations(for: meshAnchor, cameraPosition: cameraPosition)
         }
-
-        refreshRedOverlay(cameraPosition: cameraPosition, timestamp: frame.timestamp)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -149,24 +157,78 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         }
     }
 
-    private func refreshRedOverlay(cameraPosition: SIMD3<Float>, timestamp: TimeInterval) {
-        guard timestamp - lastOverlayRefresh >= minOverlayRefreshInterval else { return }
-        lastOverlayRefresh = timestamp
-
-        let samples = withVoxelGridLock {
-            voxelGrid.incompleteSamples(limit: FrostedCoverageOverlayRenderer.maxVisibleNodes, near: cameraPosition)
-        }
-        Self.logger.debug("overlay refresh incompleteSamples=\(samples.count) at=\(timestamp, format: .fixed(precision: 3))")
-
-        DispatchQueue.main.async { [weak self] in
-            self?.coverageOverlayRenderer.update(samples: samples)
-        }
-    }
-
     private func withVoxelGridLock<T>(_ operation: () -> T) -> T {
         voxelGridLock.lock()
         defer { voxelGridLock.unlock() }
         return operation()
+    }
+}
+
+// MARK: - Fog reveal rendering (SceneKit render thread)
+
+extension ARSessionManager {
+    func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        // pointOfView doesn't exist until the session is actually running, so
+        // the fog plane can't be attached at init.
+        guard !didAttachFogPlane, let pointOfView = sceneView.pointOfView else { return }
+        pointOfView.addChildNode(FogRevealRenderer.makeFogPlaneNode())
+        didAttachFogPlane = true
+        Self.logger.notice("fog plane attached to camera")
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        updateFogGeometry(node: node, meshAnchor: meshAnchor)
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        updateFogGeometry(node: node, meshAnchor: meshAnchor)
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        lastMeshRebuild.removeValue(forKey: meshAnchor.identifier)
+    }
+
+    private func updateFogGeometry(node: SCNNode, meshAnchor: ARMeshAnchor) {
+        let now = CACurrentMediaTime()
+        guard shouldRebuildMesh(for: meshAnchor.identifier, now: now) else { return }
+
+        let meshGeometry = meshAnchor.geometry
+        let vertices = meshGeometry.vertices
+        let transform = meshAnchor.transform
+
+        // Resolve every vertex's confidence under the lock (cheap dictionary
+        // reads of a cached float), then release it before building the buffers.
+        var confidences = [Float]()
+        confidences.reserveCapacity(vertices.count)
+        withVoxelGridLock {
+            for index in 0..<vertices.count {
+                let local = vertices[index]
+                let world4 = transform * SIMD4<Float>(local, 1)
+                confidences.append(voxelGrid.confidence(at: SIMD3<Float>(world4.x, world4.y, world4.z)))
+            }
+        }
+
+        let geometry = FogRevealRenderer.makeGeometry(from: meshGeometry, confidences: confidences)
+        node.geometry = geometry
+        node.renderingOrder = FogRevealRenderer.meshRenderingOrder
+    }
+
+    private func shouldRebuildMesh(for anchorID: UUID, now: TimeInterval) -> Bool {
+        if now - meshRebuildWindowStart >= 1 {
+            meshRebuildWindowStart = now
+            meshRebuildsInWindow = 0
+        }
+        guard meshRebuildsInWindow < maxMeshRebuildsPerSecond else { return false }
+
+        let last = lastMeshRebuild[anchorID] ?? 0
+        guard now - last >= minMeshRebuildInterval else { return false }
+
+        lastMeshRebuild[anchorID] = now
+        meshRebuildsInWindow += 1
+        return true
     }
 }
 
