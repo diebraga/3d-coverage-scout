@@ -52,4 +52,59 @@ final class CoverageClassifierTests: XCTestCase {
         XCTAssertFalse(CoverageClassifier.isValid(tooClose))
         XCTAssertFalse(CoverageClassifier.isValid(tooSteep))
     }
+
+    // MARK: - Confidence (drives the gradual fog reveal)
+
+    func test_confidence_noObservations_isZero() {
+        XCTAssertEqual(CoverageClassifier.confidence([]), 0)
+    }
+
+    func test_confidence_onlyInvalidObservations_isZero() {
+        let tooFar = makeObservation(direction: SIMD3(0, 0, 1), distance: 5.0, angle: 10)
+        let tooGrazing = makeObservation(direction: SIMD3(1, 0, 0), distance: 1.0, angle: 80)
+        XCTAssertEqual(CoverageClassifier.confidence([tooFar, tooGrazing]), 0)
+    }
+
+    func test_confidence_singleValidObservation_isZero() {
+        // One viewpoint has no angular separation yet, so no parallax has been
+        // established — nothing to be confident about.
+        let single = makeObservation(direction: SIMD3(0, 0, 1), distance: 1.0, angle: 10)
+        XCTAssertEqual(CoverageClassifier.confidence([single]), 0)
+    }
+
+    func test_confidence_partialSeparation_isBetweenZeroAndOne() {
+        // ~7.5 degrees apart: half of the 15 degree confirmed threshold.
+        let a = makeObservation(direction: SIMD3(0, 0, 1), distance: 1.0, angle: 10)
+        let b = makeObservation(direction: SIMD3(0.1317, 0, 1), distance: 1.0, angle: 10)
+
+        let score = CoverageClassifier.confidence([a, b])
+
+        XCTAssertGreaterThan(score, 0.4)
+        XCTAssertLessThan(score, 0.6)
+    }
+
+    func test_confidence_atConfirmedThreshold_isOne() {
+        let a = makeObservation(direction: SIMD3(0, 0, 1), distance: 1.0, angle: 10)
+        let b = makeObservation(direction: SIMD3(1, 0, 1), distance: 1.0, angle: 10)
+
+        XCTAssertEqual(CoverageClassifier.confidence([a, b]), 1.0)
+        // Stays consistent with the discrete classifier by construction.
+        XCTAssertEqual(CoverageClassifier.classify([a, b]), .green)
+    }
+
+    func test_confidence_neverExceedsOne() {
+        let a = makeObservation(direction: SIMD3(0, 0, 1), distance: 1.0, angle: 10)
+        let opposite = makeObservation(direction: SIMD3(0, 0, -1), distance: 1.0, angle: 10)
+        XCTAssertEqual(CoverageClassifier.confidence([a, opposite]), 1.0)
+    }
+
+    func test_confidence_usesWidestPairNotMostRecent() {
+        let a = makeObservation(direction: SIMD3(0, 0, 1), distance: 1.0, angle: 10)
+        let wide = makeObservation(direction: SIMD3(1, 0, 1), distance: 1.0, angle: 10)
+        let nearDuplicate = makeObservation(direction: SIMD3(0.01, 0, 1), distance: 1.0, angle: 10)
+
+        // The last-added observation is nearly identical to the first, but the
+        // widest pair in the set already crossed the threshold.
+        XCTAssertEqual(CoverageClassifier.confidence([a, wide, nearDuplicate]), 1.0)
+    }
 }

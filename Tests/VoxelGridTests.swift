@@ -120,6 +120,42 @@ final class VoxelGridTests: XCTestCase {
         XCTAssertEqual(grid.redCount, 0)
     }
 
+    // MARK: - Cached confidence (drives the gradual fog reveal)
+
+    func test_confidence_unobservedPosition_isZero() {
+        let grid = VoxelGrid()
+        XCTAssertEqual(grid.confidence(at: SIMD3(9, 9, 9)), 0)
+    }
+
+    func test_confidence_risesWithAngularSeparation() {
+        let grid = VoxelGrid()
+        let position = SIMD3<Float>(0, 0, 0)
+
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: position)
+        XCTAssertEqual(grid.confidence(at: position), 0)
+
+        // ~7.5 degrees apart — half the confirmed threshold.
+        grid.recordObservation(makeObservation(direction: SIMD3(0.1317, 0, 1)), at: position)
+        let partial = grid.confidence(at: position)
+        XCTAssertGreaterThan(partial, 0.4)
+        XCTAssertLessThan(partial, 0.6)
+    }
+
+    func test_confidence_isOneOnceConfirmedAndStaysThere() {
+        let grid = VoxelGrid()
+        let position = SIMD3<Float>(0, 0, 0)
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: position)
+        grid.recordObservation(makeObservation(direction: SIMD3(1, 0, 1)), at: position)
+
+        XCTAssertEqual(grid.confidence(at: position), 1.0)
+
+        // Confirmed voxels short-circuit further recording; confidence must not regress.
+        for _ in 0..<10 {
+            grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: position)
+        }
+        XCTAssertEqual(grid.confidence(at: position), 1.0)
+    }
+
     func test_incompleteSamples_returnsGrayVoxel() {
         let grid = VoxelGrid()
         let position = SIMD3<Float>(0, 0, 0)

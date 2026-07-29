@@ -26,6 +26,9 @@ final class VoxelGrid {
 
     private var observationsByVoxel: [VoxelCoordinate: [Observation]] = [:]
     private var classificationByVoxel: [VoxelCoordinate: VoxelCoverage] = [:]
+    // Cached so rendering can read a plain float per vertex instead of re-running
+    // CoverageClassifier.confidence's O(n^2) scan on every mesh rebuild.
+    private var confidenceByVoxel: [VoxelCoordinate: Float] = [:]
     private(set) var greenCount = 0
     private(set) var redCount = 0
 
@@ -56,6 +59,7 @@ final class VoxelGrid {
 
         let newClassification = CoverageClassifier.classify(observations)
         classificationByVoxel[coordinate] = newClassification
+        confidenceByVoxel[coordinate] = CoverageClassifier.confidence(observations)
         guard newClassification != oldClassification else { return }
 
         if oldClassification == .red { redCount -= 1 }
@@ -65,6 +69,11 @@ final class VoxelGrid {
 
     func classification(at worldPosition: SIMD3<Float>) -> VoxelCoverage {
         classificationByVoxel[Self.coordinate(for: worldPosition)] ?? .gray
+    }
+
+    /// 0 = never observed (fully fogged), 1 = confirmed (fully revealed).
+    func confidence(at worldPosition: SIMD3<Float>) -> Float {
+        confidenceByVoxel[Self.coordinate(for: worldPosition)] ?? 0
     }
 
     func incompleteSamples(limit: Int, near cameraPosition: SIMD3<Float>) -> [VoxelOverlaySample] {
