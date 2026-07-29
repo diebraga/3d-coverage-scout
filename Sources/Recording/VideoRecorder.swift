@@ -71,12 +71,20 @@ final class VideoRecorder {
 
         isRecording = false
         videoInput?.markAsFinished()
-        writer.finishWriting {
+        writer.finishWriting { [weak self] in
+            let result: Result<URL, Error>
             if writer.status == .completed {
-                completion(.success(url))
+                result = .success(url)
             } else {
-                completion(.failure(writer.error ?? RecorderError.writerSetupFailed))
+                result = .failure(writer.error ?? RecorderError.writerSetupFailed)
             }
+
+            self?.assetWriter = nil
+            self?.videoInput = nil
+            self?.adaptor = nil
+            self?.sessionStarted = false
+            self?.outputURL = nil
+            completion(result)
         }
     }
 }

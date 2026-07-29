@@ -41,4 +41,26 @@ final class VideoRecorderTests: XCTestCase {
         _ = try recorder.startRecording(width: 64, height: 64)
         XCTAssertThrowsError(try recorder.startRecording(width: 64, height: 64))
     }
+
+    func test_canRecordAgainAfterStopping() throws {
+        let recorder = VideoRecorder()
+
+        let firstURL = try recorder.startRecording(width: 64, height: 64)
+        recorder.appendFrame(makePixelBuffer(width: 64, height: 64), timestamp: CMTime(value: 0, timescale: 30))
+
+        let firstStop = expectation(description: "first stop")
+        recorder.stopRecording { _ in firstStop.fulfill() }
+        wait(for: [firstStop], timeout: 5)
+
+        let secondURL = try recorder.startRecording(width: 64, height: 64)
+        recorder.appendFrame(makePixelBuffer(width: 64, height: 64), timestamp: CMTime(value: 0, timescale: 30))
+
+        let secondStop = expectation(description: "second stop")
+        recorder.stopRecording { _ in secondStop.fulfill() }
+        wait(for: [secondStop], timeout: 5)
+
+        XCTAssertNotEqual(firstURL, secondURL)
+        try? FileManager.default.removeItem(at: firstURL)
+        try? FileManager.default.removeItem(at: secondURL)
+    }
 }

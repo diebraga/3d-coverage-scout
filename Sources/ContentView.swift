@@ -14,9 +14,12 @@ struct ContentView: View {
     @State private var didSaveVideo = false
     @State private var didFailToSaveVideo = false
     @StateObject private var sessionManager = ARSessionManager()
+    @State private var recordingStartedAt: Date?
+    @State private var recordingElapsedText: String?
+    @State private var recordingTimerTask: Task<Void, Never>?
     private let recorder = VideoRecorder()
     private let recorderQueue = DispatchQueue(label: "coverage-scout.recorder")
-    private let recorderGate = RecordingFrameGate()
+    private let recorderPacer = RecordingFramePacer(frameRate: 30)
 
     var body: some View {
         Group {
@@ -24,7 +27,12 @@ struct ContentView: View {
             case .idle:
                 IdleStartView(onStart: openCamera)
             case .scanning:
-                ARCoverageScreen(sessionManager: sessionManager, isRecording: isRecording, onToggleRecording: toggleRecording)
+                ARCoverageScreen(
+                    sessionManager: sessionManager,
+                    isRecording: isRecording,
+                    recordingElapsedText: recordingElapsedText,
+                    onToggleRecording: toggleRecording
+                )
             }
         }
         .overlay(alignment: .top) {
@@ -69,11 +77,15 @@ struct ContentView: View {
     }
 
     private func beginRecording() {
-        let scanGeneration = recorderGate.begin()
+        let scanGeneration = recorderPacer.begin()
+        recordingStartedAt = Date()
+        recordingElapsedText = "00:00"
+        startRecordingTimer()
+
         sessionManager.onFrameCaptured = { pixelBuffer, timestamp in
-            guard self.recorderGate.tryAcceptFrame(for: scanGeneration) else { return }
+            guard let outputTimestamp = self.recorderPacer.offerFrame(for: scanGeneration, sourceTimestamp: timestamp) else { return }
             self.recorderQueue.async {
-                defer { self.recorderGate.completeFrame() }
+                defer { self.recorderPacer.completeFrame() }
                 if !self.recorder.isRecording {
                     let width = CVPixelBufferGetWidth(pixelBuffer)
                     let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -83,9 +95,10 @@ struct ContentView: View {
                         DispatchQueue.main.async {
                             self.didFailToSaveVideo = true
                         }
+                        return
                     }
                 }
-                self.recorder.appendFrame(pixelBuffer, timestamp: timestamp)
+                self.recorder.appendFrame(pixelBuffer, timestamp: outputTimestamp)
             }
         }
         isRecording = true
@@ -94,12 +107,31 @@ struct ContentView: View {
         AudioServicesPlaySystemSound(1117)
     }
 
+    private func startRecordingTimer() {
+        recordingTimerTask?.cancel()
+        recordingTimerTask = Task {
+            while !Task.isCancelled {
+                guard let recordingStartedAt else { return }
+                let elapsed = max(0, Int(Date().timeIntervalSince(recordingStartedAt)))
+                let minutes = elapsed / 60
+                let seconds = elapsed % 60
+                await MainActor.run {
+                    recordingElapsedText = String(format: "%02d:%02d", minutes, seconds)
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
+
     private func stopRecording() {
         guard !isStopping else { return }
         isStopping = true
         isRecording = false
-        sessionManager.stop()
-        recorderGate.end()
+        recordingTimerTask?.cancel()
+        recordingTimerTask = nil
+        recordingStartedAt = nil
+        recordingElapsedText = nil
+        recorderPacer.end()
         sessionManager.onFrameCaptured = nil
 
         // ponytail: one serial queue protects the single recorder; split it only if recording throughput requires it.
@@ -108,6 +140,7 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     self.isStopping = false
                     self.screen = .idle
+                    self.sessionManager.stop()
                 }
                 guard case .success(let url) = result else {
                     DispatchQueue.main.async {

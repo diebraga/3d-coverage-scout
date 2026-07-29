@@ -11,6 +11,7 @@ struct ARCoverageView: UIViewRepresentable {
 struct ARCoverageScreen: View {
     @ObservedObject var sessionManager: ARSessionManager
     let isRecording: Bool
+    let recordingElapsedText: String?
     let onToggleRecording: () -> Void
 
     var body: some View {
@@ -29,6 +30,14 @@ struct ARCoverageScreen: View {
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                                 .padding(.top, 12)
+                        }
+                        if let recordingElapsedText {
+                            Text(recordingElapsedText)
+                                .font(.system(.headline, design: .monospaced))
+                                .padding(8)
+                                .background(.black.opacity(0.7))
+                                .foregroundColor(.green)
+                                .cornerRadius(8)
                         }
                         Text("Scan quality: \(Int(sessionManager.qualityPercentage))%")
                             .padding(8)
