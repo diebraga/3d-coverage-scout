@@ -11,9 +11,16 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     private let voxelGridLock = NSLock()
     private let frameCaptureLock = NSLock()
     private let coverageOverlayRenderer = FrostedCoverageOverlayRenderer()
+    // Confirmed by a real device crash log: ARSCNView defaults ARSessionDelegate
+    // callbacks to the main thread unless given an explicit queue. Any per-frame
+    // cost there (mesh sampling, voxel recording) risks blocking the UI long
+    // enough for iOS's watchdog to SIGKILL the app. Moving it here is a
+    // structural fix, not just a mitigation of the VoxelGrid growth bug.
+    private let sessionDelegateQueue = DispatchQueue(label: "com.diebraga.CoverageScout.arsession", qos: .userInteractive)
     private var frameCaptureHandler: ((CVPixelBuffer, CMTime) -> Void)?
 
-    // Touched only from ARSessionDelegate.didUpdate, which ARKit invokes serially.
+    // Touched only from ARSessionDelegate.didUpdate, which ARKit invokes serially
+    // on sessionDelegateQueue (a serial queue) — still one-at-a-time, just off main.
     private var lastObservationTime: [UUID: TimeInterval] = [:]
     private let minObservationInterval: TimeInterval = 0.1
     private var lastOverlayRefresh: TimeInterval = 0
@@ -40,6 +47,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         super.init()
         sceneView.delegate = self
         sceneView.session.delegate = self
+        sceneView.session.delegateQueue = sessionDelegateQueue
         sceneView.automaticallyUpdatesLighting = true
         sceneView.scene.rootNode.addChildNode(coverageOverlayRenderer.rootNode)
     }

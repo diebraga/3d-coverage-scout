@@ -87,6 +87,39 @@ final class VoxelGridTests: XCTestCase {
         XCTAssertEqual(samples[0].coordinate, VoxelGrid.coordinate(for: SIMD3(0, 0, 0)))
     }
 
+    func test_manyRepeatedObservations_staysRedAndCountsStayCorrect() {
+        // Regression test for a real device crash: recording unbounded observations
+        // at one voxel made CoverageClassifier.classify's O(n^2) angle check blow up
+        // on the main thread until iOS's watchdog killed the app. This simulates a
+        // long dwell near one spot (100 same-angle observations, never wide enough
+        // to go green) and asserts the classification and counts stay correct —
+        // the array itself is capped internally and not directly observable here.
+        let grid = VoxelGrid()
+        let position = SIMD3<Float>(0, 0, 0)
+        for _ in 0..<100 {
+            grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: position)
+        }
+        XCTAssertEqual(grid.classification(at: position), .red)
+        XCTAssertEqual(grid.redCount, 1)
+        XCTAssertEqual(grid.greenCount, 0)
+    }
+
+    func test_onceGreen_furtherObservationsAreIgnored() {
+        let grid = VoxelGrid()
+        let position = SIMD3<Float>(0, 0, 0)
+        grid.recordObservation(makeObservation(direction: SIMD3(0, 0, 1)), at: position)
+        grid.recordObservation(makeObservation(direction: SIMD3(1, 0, 1)), at: position)
+        XCTAssertEqual(grid.greenCount, 1)
+
+        for _ in 0..<20 {
+            grid.recordObservation(makeObservation(direction: SIMD3(0, 1, 0)), at: position)
+        }
+
+        XCTAssertEqual(grid.classification(at: position), .green)
+        XCTAssertEqual(grid.greenCount, 1)
+        XCTAssertEqual(grid.redCount, 0)
+    }
+
     func test_incompleteSamples_returnsGrayVoxel() {
         let grid = VoxelGrid()
         let position = SIMD3<Float>(0, 0, 0)

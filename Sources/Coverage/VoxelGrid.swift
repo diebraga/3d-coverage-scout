@@ -15,6 +15,15 @@ struct VoxelOverlaySample: Hashable {
 final class VoxelGrid {
     static let voxelSize: Float = 0.1
 
+    // Confirmed root cause of a real device crash (watchdog SIGKILL,
+    // 0x8BADF00D): CoverageClassifier.classify is O(n^2) in a voxel's
+    // observation count, and this array previously grew unbounded for the
+    // whole session — a voxel the camera lingers near or revisits
+    // accumulates dozens of observations, and that quadratic cost on the
+    // main thread eventually blocks it long enough for iOS to kill the app.
+    // 8 samples is far more than classify() needs to find a wide-angle pair.
+    private static let maxObservationsPerVoxel = 8
+
     private var observationsByVoxel: [VoxelCoordinate: [Observation]] = [:]
     private var classificationByVoxel: [VoxelCoordinate: VoxelCoverage] = [:]
     private(set) var greenCount = 0
@@ -30,16 +39,25 @@ final class VoxelGrid {
 
     func recordObservation(_ observation: Observation, at worldPosition: SIMD3<Float>) {
         let coordinate = Self.coordinate(for: worldPosition)
+        let oldClassification = classificationByVoxel[coordinate] ?? .gray
+
+        // Once green, more observations can't add information (classify()
+        // only needs ANY wide-angle pair, which already exists) — skipping
+        // this also caps the array's lifetime growth at the point it stops
+        // being useful, not just its size.
+        guard oldClassification != .green else { return }
+
         var observations = observationsByVoxel[coordinate] ?? []
+        if observations.count >= Self.maxObservationsPerVoxel {
+            observations.removeFirst()
+        }
         observations.append(observation)
         observationsByVoxel[coordinate] = observations
 
-        let oldClassification = classificationByVoxel[coordinate] ?? .gray
         let newClassification = CoverageClassifier.classify(observations)
         classificationByVoxel[coordinate] = newClassification
         guard newClassification != oldClassification else { return }
 
-        if oldClassification == .green { greenCount -= 1 }
         if oldClassification == .red { redCount -= 1 }
         if newClassification == .green { greenCount += 1 }
         if newClassification == .red { redCount += 1 }
