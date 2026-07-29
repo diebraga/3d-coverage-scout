@@ -8,34 +8,6 @@ struct ContentView: View {
         case scanning
     }
 
-    private final class RecorderGate {
-        let lock = NSLock()
-        var acceptsFrames = false
-        var generation: UInt64 = 0
-
-        func begin() -> UInt64 {
-            lock.lock()
-            defer { lock.unlock() }
-            generation &+= 1
-            acceptsFrames = true
-            return generation
-        }
-
-        func end() {
-            lock.lock()
-            acceptsFrames = false
-            generation &+= 1
-            lock.unlock()
-        }
-
-        func withAcceptedFrame(for generation: UInt64, _ operation: () -> Void) {
-            lock.lock()
-            defer { lock.unlock() }
-            guard acceptsFrames, self.generation == generation else { return }
-            operation()
-        }
-    }
-
     @State private var screen: Screen = .idle
     @State private var isRecording = false
     @State private var isStopping = false
@@ -44,7 +16,7 @@ struct ContentView: View {
     @StateObject private var sessionManager = ARSessionManager()
     private let recorder = VideoRecorder()
     private let recorderQueue = DispatchQueue(label: "coverage-scout.recorder")
-    private let recorderGate = RecorderGate()
+    private let recorderGate = RecordingFrameGate()
 
     var body: some View {
         Group {
@@ -99,21 +71,21 @@ struct ContentView: View {
     private func beginRecording() {
         let scanGeneration = recorderGate.begin()
         sessionManager.onFrameCaptured = { pixelBuffer, timestamp in
-            self.recorderGate.withAcceptedFrame(for: scanGeneration) {
-                self.recorderQueue.async {
-                    if !self.recorder.isRecording {
-                        let width = CVPixelBufferGetWidth(pixelBuffer)
-                        let height = CVPixelBufferGetHeight(pixelBuffer)
-                        do {
-                            _ = try self.recorder.startRecording(width: width, height: height)
-                        } catch {
-                            DispatchQueue.main.async {
-                                self.didFailToSaveVideo = true
-                            }
+            guard self.recorderGate.tryAcceptFrame(for: scanGeneration) else { return }
+            self.recorderQueue.async {
+                defer { self.recorderGate.completeFrame() }
+                if !self.recorder.isRecording {
+                    let width = CVPixelBufferGetWidth(pixelBuffer)
+                    let height = CVPixelBufferGetHeight(pixelBuffer)
+                    do {
+                        _ = try self.recorder.startRecording(width: width, height: height)
+                    } catch {
+                        DispatchQueue.main.async {
+                            self.didFailToSaveVideo = true
                         }
                     }
-                    self.recorder.appendFrame(pixelBuffer, timestamp: timestamp)
                 }
+                self.recorder.appendFrame(pixelBuffer, timestamp: timestamp)
             }
         }
         isRecording = true
