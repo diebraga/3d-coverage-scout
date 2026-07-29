@@ -7,17 +7,14 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     let voxelGrid = VoxelGrid()
     private let voxelGridLock = NSLock()
     private let frameCaptureLock = NSLock()
+    private let redOverlayRenderer = RedTodoOverlayRenderer()
     private var frameCaptureHandler: ((CVPixelBuffer, CMTime) -> Void)?
 
-    // Both dictionaries below are touched only from their single respective delegate
-    // callback (ARSessionDelegate.didUpdate for the first, the SCNSceneRendererDelegate
-    // pair for the second), each invoked serially by ARKit/SceneKit — no lock needed.
-    // ponytail: per-anchor throttling, not per-vertex — bounds cost as anchor count grows
-    // without capping how fresh a freshly-discovered anchor's first render is.
+    // Touched only from ARSessionDelegate.didUpdate, which ARKit invokes serially.
     private var lastObservationTime: [UUID: TimeInterval] = [:]
     private let minObservationInterval: TimeInterval = 0.1
-    private var lastRebuildTime: [UUID: TimeInterval] = [:]
-    private let minRebuildInterval: TimeInterval = 0.15
+    private var lastOverlayRefresh: TimeInterval = 0
+    private let minOverlayRefreshInterval: TimeInterval = 0.25
 
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
@@ -41,6 +38,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         sceneView.delegate = self
         sceneView.session.delegate = self
         sceneView.automaticallyUpdatesLighting = true
+        sceneView.scene.rootNode.addChildNode(redOverlayRenderer.rootNode)
     }
 
     func start() {
@@ -52,14 +50,6 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
 
     func stop() {
         sceneView.session.pause()
-    }
-
-    func color(for coverage: VoxelCoverage) -> SCNVector4 {
-        switch coverage {
-        case .gray: return SCNVector4(0.6, 0.6, 0.6, 0.35)
-        case .red: return SCNVector4(1.0, 0.2, 0.2, 0.55)
-        case .green: return SCNVector4(0.2, 1.0, 0.2, 0.55)
-        }
     }
 
     // MARK: - ARSessionDelegate
@@ -82,6 +72,8 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
             lastObservationTime[meshAnchor.identifier] = now
             recordObservations(for: meshAnchor, cameraPosition: cameraPosition)
         }
+
+        refreshRedOverlay(cameraPosition: cameraPosition, timestamp: frame.timestamp)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -143,6 +135,19 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         }
     }
 
+    private func refreshRedOverlay(cameraPosition: SIMD3<Float>, timestamp: TimeInterval) {
+        guard timestamp - lastOverlayRefresh >= minOverlayRefreshInterval else { return }
+        lastOverlayRefresh = timestamp
+
+        let samples = withVoxelGridLock {
+            voxelGrid.incompleteSamples(limit: RedTodoOverlayRenderer.maxVisibleNodes, near: cameraPosition)
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.redOverlayRenderer.update(samples: samples)
+        }
+    }
+
     private func withVoxelGridLock<T>(_ operation: () -> T) -> T {
         voxelGridLock.lock()
         defer { voxelGridLock.unlock() }
@@ -157,87 +162,5 @@ private extension ARGeometrySource {
         precondition(format == .float3, "Expected float3 vertex/normal buffer")
         let pointer = buffer.contents().advanced(by: offset + stride * index)
         return pointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-    }
-}
-
-extension ARSessionManager {
-    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
-        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        updateGeometry(node: node, meshAnchor: meshAnchor)
-    }
-
-    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        updateGeometry(node: node, meshAnchor: meshAnchor)
-    }
-
-    private func updateGeometry(node: SCNNode, meshAnchor: ARMeshAnchor) {
-        let now = Date().timeIntervalSince1970
-        if let last = lastRebuildTime[meshAnchor.identifier], now - last < minRebuildInterval {
-            // Skip this tick — the node keeps rendering its last-built geometry, so
-            // nothing disappears, it just doesn't rebuild faster than minRebuildInterval.
-            return
-        }
-        lastRebuildTime[meshAnchor.identifier] = now
-
-        let geometry = meshAnchor.geometry
-        let vertexSource = geometry.vertices
-        let transform = meshAnchor.transform
-
-        var colors: [SCNVector4] = []
-        colors.reserveCapacity(vertexSource.count)
-        withVoxelGridLock {
-            for i in 0..<vertexSource.count {
-                let local = vertexSource[i]
-                let world4 = transform * SIMD4<Float>(local, 1)
-                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
-                colors.append(color(for: voxelGrid.classification(at: world)))
-            }
-        }
-
-        let colorData = Data(bytes: colors, count: colors.count * MemoryLayout<SCNVector4>.stride)
-        let colorSource = SCNGeometrySource(
-            data: colorData,
-            semantic: .color,
-            vectorCount: colors.count,
-            usesFloatComponents: true,
-            componentsPerVector: 4,
-            bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<SCNVector4>.stride
-        )
-
-        let scnGeometry = SCNGeometry(from: geometry, replacingColorWith: colorSource)
-        node.geometry = scnGeometry
-        let material = scnGeometry.firstMaterial ?? SCNMaterial()
-        material.lightingModel = .constant
-        material.isDoubleSided = true
-        material.transparency = 1.0
-        material.blendMode = .alpha
-        scnGeometry.firstMaterial = material
-    }
-}
-
-private extension SCNGeometry {
-    convenience init(from meshGeometry: ARMeshGeometry, replacingColorWith colorSource: SCNGeometrySource) {
-        let vertexSource = SCNGeometrySource(
-            buffer: meshGeometry.vertices.buffer,
-            vertexFormat: meshGeometry.vertices.format,
-            semantic: .vertex,
-            vertexCount: meshGeometry.vertices.count,
-            dataOffset: meshGeometry.vertices.offset,
-            dataStride: meshGeometry.vertices.stride
-        )
-
-        let faces = meshGeometry.faces
-        let faceData = Data(bytes: faces.buffer.contents(), count: faces.buffer.length)
-        let element = SCNGeometryElement(
-            data: faceData,
-            primitiveType: .triangles,
-            primitiveCount: faces.count,
-            bytesPerIndex: faces.bytesPerIndex
-        )
-
-        self.init(sources: [vertexSource, colorSource], elements: [element])
     }
 }
