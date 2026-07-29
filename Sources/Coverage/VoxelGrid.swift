@@ -12,6 +12,16 @@ struct VoxelOverlaySample: Hashable {
     let coverage: VoxelCoverage
 }
 
+/// Visual-only mapping for the live preview. Confirmed surfaces fade completely
+/// back to the normal camera image.
+enum ScanPreviewStyle {
+    static let maximumOpacity: Float = 0.22
+
+    static func opacity(for confidence: Float) -> Float {
+        maximumOpacity * (1 - min(max(confidence, 0), 1))
+    }
+}
+
 final class VoxelGrid {
     static let voxelSize: Float = 0.1
 

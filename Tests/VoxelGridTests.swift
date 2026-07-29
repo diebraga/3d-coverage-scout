@@ -185,6 +185,13 @@ final class VoxelGridTests: XCTestCase {
         XCTAssertEqual(grid.confidence(at: position), 1.0)
     }
 
+    func test_previewOpacity_fadesAwayForConfirmedCoverage() {
+        XCTAssertGreaterThan(ScanPreviewStyle.opacity(for: 0), 0)
+        XCTAssertGreaterThan(ScanPreviewStyle.opacity(for: 0.5), 0)
+        XCTAssertLessThan(ScanPreviewStyle.opacity(for: 0.5), ScanPreviewStyle.opacity(for: 0))
+        XCTAssertEqual(ScanPreviewStyle.opacity(for: 1), 0)
+    }
+
     func test_incompleteSamples_returnsGrayVoxel() {
         let grid = VoxelGrid()
         let position = SIMD3<Float>(0, 0, 0)
