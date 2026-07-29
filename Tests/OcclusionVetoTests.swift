@@ -86,4 +86,60 @@ final class OcclusionVetoTests: XCTestCase {
     func test_isBlocked_nanLiveDepth_isFalse() {
         XCTAssertFalse(OcclusionVeto.isBlocked(liveDepth: .nan, vertexDistance: 1.0, marginMeters: 0.05))
     }
+
+    // MARK: - depthPixel
+
+    func test_depthPixel_projectsCenterPointIntoDepthMap() {
+        var intrinsics = simd_float3x3(diagonal: SIMD3<Float>(1, 1, 1))
+        intrinsics[0, 0] = 100
+        intrinsics[1, 1] = 100
+        intrinsics[2, 0] = 50
+        intrinsics[2, 1] = 40
+
+        let sample = OcclusionVeto.depthPixel(
+            for: SIMD3<Float>(0, 0, -2),
+            cameraTransform: matrix_identity_float4x4,
+            cameraIntrinsics: intrinsics,
+            cameraImageResolution: CGSize(width: 100, height: 80),
+            depthMapSize: CGSize(width: 50, height: 40)
+        )
+
+        guard let sample else {
+            XCTFail("Expected projected depth pixel")
+            return
+        }
+        XCTAssertEqual(sample.x, 25)
+        XCTAssertEqual(sample.y, 20)
+        XCTAssertEqual(sample.vertexDistance, 2, accuracy: 0.001)
+    }
+
+    func test_depthPixel_returnsNilForPointBehindCamera() {
+        let sample = OcclusionVeto.depthPixel(
+            for: SIMD3<Float>(0, 0, 2),
+            cameraTransform: matrix_identity_float4x4,
+            cameraIntrinsics: simd_float3x3(diagonal: SIMD3<Float>(1, 1, 1)),
+            cameraImageResolution: CGSize(width: 100, height: 80),
+            depthMapSize: CGSize(width: 50, height: 40)
+        )
+
+        XCTAssertNil(sample)
+    }
+
+    func test_depthPixel_returnsNilForPointOutsideDepthMap() {
+        var intrinsics = simd_float3x3(diagonal: SIMD3<Float>(1, 1, 1))
+        intrinsics[0, 0] = 100
+        intrinsics[1, 1] = 100
+        intrinsics[2, 0] = 50
+        intrinsics[2, 1] = 40
+
+        let sample = OcclusionVeto.depthPixel(
+            for: SIMD3<Float>(5, 0, -1),
+            cameraTransform: matrix_identity_float4x4,
+            cameraIntrinsics: intrinsics,
+            cameraImageResolution: CGSize(width: 100, height: 80),
+            depthMapSize: CGSize(width: 50, height: 40)
+        )
+
+        XCTAssertNil(sample)
+    }
 }

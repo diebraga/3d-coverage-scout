@@ -8,11 +8,15 @@ enum FogRevealRenderer {
     static let meshRenderingOrder = 0
     private static let maximumPointsPerAnchor = 1_500
 
+    static func samplingStride(vertexCount: Int) -> Int {
+        max(1, vertexCount / maximumPointsPerAnchor)
+    }
+
     /// Builds a bounded point preview for one mesh anchor. `confidences` is
     /// resolved by the caller so the voxel-grid lock only covers dictionary reads.
-    static func makeGeometry(from meshGeometry: ARMeshGeometry, confidences: [Float]) -> SCNGeometry {
+    static func makeGeometry(from meshGeometry: ARMeshGeometry, confidences: [Float], visible: [Bool]? = nil) -> SCNGeometry {
         let vertices = meshGeometry.vertices
-        let stride = max(1, vertices.count / maximumPointsPerAnchor)
+        let stride = samplingStride(vertexCount: vertices.count)
         let baseAddress = vertices.buffer.contents()
 
         var positions = [SIMD3<Float>]()
@@ -20,6 +24,7 @@ enum FogRevealRenderer {
         positions.reserveCapacity(maximumPointsPerAnchor)
         colors.reserveCapacity(maximumPointsPerAnchor)
         for index in Swift.stride(from: 0, to: vertices.count, by: stride) {
+            guard visible?[index] ?? true else { continue }
             let confidence = index < confidences.count ? confidences[index] : 0
             let alpha = ScanPreviewStyle.opacity(for: confidence)
             guard alpha > 0 else { continue }

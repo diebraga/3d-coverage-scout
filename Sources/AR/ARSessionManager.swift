@@ -10,6 +10,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     let voxelGrid = VoxelGrid()
     private let voxelGridLock = NSLock()
     private let frameCaptureLock = NSLock()
+    private let depthSnapshotLock = NSLock()
     // Confirmed by a real device crash log: ARSCNView defaults ARSessionDelegate
     // callbacks to the main thread unless given an explicit queue. Any per-frame
     // cost there (mesh sampling, voxel recording) risks blocking the UI long
@@ -35,6 +36,8 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     private var meshRebuildsInWindow = 0
     private var meshRebuildWindowStart: TimeInterval = 0
     private let maxMeshRebuildsPerSecond = 8
+    private let occlusionMarginMeters: Float = 0.06
+    private var latestDepthSnapshot: DepthSnapshot?
 
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
@@ -66,6 +69,9 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         guard isLiDARSupported else { return }
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
         sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
@@ -79,6 +85,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let timestamp = frame.timestamp.isNaN ? CMTime.zero : CMTime(seconds: frame.timestamp, preferredTimescale: 600)
         onFrameCaptured?(frame.capturedImage, timestamp)
+        updateDepthSnapshot(from: frame)
 
         let cameraPosition = SIMD3<Float>(
             frame.camera.transform.columns.3.x,
@@ -197,18 +204,23 @@ extension ARSessionManager {
 
         // Resolve every vertex's confidence under the lock (cheap dictionary
         // reads of a cached float), then release it before building the buffers.
+        let depthSnapshot = withDepthSnapshotLock { latestDepthSnapshot }
+        var worldPositions = [SIMD3<Float>]()
         var confidences = [Float]()
+        worldPositions.reserveCapacity(vertices.count)
         confidences.reserveCapacity(vertices.count)
         withVoxelGridLock {
             for index in 0..<vertices.count {
                 let local = vertices[index]
                 let world4 = transform * SIMD4<Float>(local, 1)
                 let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                worldPositions.append(world)
                 confidences.append(voxelGrid.confidence(at: world))
             }
         }
+        let visible = visibilityMask(for: worldPositions, snapshot: depthSnapshot)
 
-        let geometry = FogRevealRenderer.makeGeometry(from: meshGeometry, confidences: confidences)
+        let geometry = FogRevealRenderer.makeGeometry(from: meshGeometry, confidences: confidences, visible: visible)
         node.geometry = geometry
         node.renderingOrder = FogRevealRenderer.meshRenderingOrder
     }
@@ -227,6 +239,61 @@ extension ARSessionManager {
         meshRebuildsInWindow += 1
         return true
     }
+
+    private func updateDepthSnapshot(from frame: ARFrame) {
+        guard let depthMap = frame.sceneDepth?.depthMap else { return }
+        withDepthSnapshotLock {
+            latestDepthSnapshot = DepthSnapshot(
+                depthMap: depthMap,
+                cameraTransform: frame.camera.transform,
+                cameraIntrinsics: frame.camera.intrinsics,
+                cameraImageResolution: frame.camera.imageResolution
+            )
+        }
+    }
+
+    private func visibilityMask(for worldPositions: [SIMD3<Float>], snapshot: DepthSnapshot?) -> [Bool] {
+        var visible = Array(repeating: true, count: worldPositions.count)
+        guard let snapshot else { return visible }
+        let width = CVPixelBufferGetWidth(snapshot.depthMap)
+        let height = CVPixelBufferGetHeight(snapshot.depthMap)
+
+        CVPixelBufferLockBaseAddress(snapshot.depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(snapshot.depthMap, .readOnly) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(snapshot.depthMap) else { return visible }
+        let floatsPerRow = CVPixelBufferGetBytesPerRow(snapshot.depthMap) / MemoryLayout<Float32>.stride
+        let depths = baseAddress.assumingMemoryBound(to: Float32.self)
+        let stride = FogRevealRenderer.samplingStride(vertexCount: worldPositions.count)
+        for index in Swift.stride(from: 0, to: worldPositions.count, by: stride) {
+            guard let pixel = OcclusionVeto.depthPixel(
+                for: worldPositions[index],
+                cameraTransform: snapshot.cameraTransform,
+                cameraIntrinsics: snapshot.cameraIntrinsics,
+                cameraImageResolution: snapshot.cameraImageResolution,
+                depthMapSize: CGSize(width: width, height: height)
+            ) else { continue }
+            let liveDepth = depths[pixel.y * floatsPerRow + pixel.x]
+            visible[index] = !OcclusionVeto.isBlocked(
+                liveDepth: liveDepth,
+                vertexDistance: pixel.vertexDistance,
+                marginMeters: occlusionMarginMeters
+            )
+        }
+        return visible
+    }
+
+    private func withDepthSnapshotLock<T>(_ operation: () -> T) -> T {
+        depthSnapshotLock.lock()
+        defer { depthSnapshotLock.unlock() }
+        return operation()
+    }
+}
+
+private struct DepthSnapshot {
+    let depthMap: CVPixelBuffer
+    let cameraTransform: simd_float4x4
+    let cameraIntrinsics: simd_float3x3
+    let cameraImageResolution: CGSize
 }
 
 private extension ARGeometrySource {
