@@ -86,4 +86,21 @@ final class VoxelGridTests: XCTestCase {
         XCTAssertEqual(samples.count, 1)
         XCTAssertEqual(samples[0].coordinate, VoxelGrid.coordinate(for: SIMD3(0, 0, 0)))
     }
+
+    func test_incompleteSamples_returnsGrayVoxel() {
+        let grid = VoxelGrid()
+        let position = SIMD3<Float>(0, 0, 0)
+        grid.recordObservation(
+            makeObservation(direction: SIMD3(0, 0, 1), distance: CoverageClassifier.maxValidDistance + 1),
+            at: position
+        )
+
+        let samples = grid.incompleteSamples(limit: 10, near: position)
+
+        XCTAssertEqual(samples.count, 1)
+        XCTAssertEqual(samples[0].coordinate, VoxelGrid.coordinate(for: position))
+        XCTAssertEqual(samples[0].coverage, .gray)
+        XCTAssertEqual(grid.redCount, 0)
+        XCTAssertEqual(grid.greenCount, 0)
+    }
 }

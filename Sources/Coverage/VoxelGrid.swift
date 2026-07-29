@@ -36,13 +36,13 @@ final class VoxelGrid {
 
         let oldClassification = classificationByVoxel[coordinate] ?? .gray
         let newClassification = CoverageClassifier.classify(observations)
+        classificationByVoxel[coordinate] = newClassification
         guard newClassification != oldClassification else { return }
 
         if oldClassification == .green { greenCount -= 1 }
         if oldClassification == .red { redCount -= 1 }
         if newClassification == .green { greenCount += 1 }
         if newClassification == .red { redCount += 1 }
-        classificationByVoxel[coordinate] = newClassification
     }
 
     func classification(at worldPosition: SIMD3<Float>) -> VoxelCoverage {
