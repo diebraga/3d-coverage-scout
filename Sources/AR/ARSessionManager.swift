@@ -37,6 +37,13 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     private var meshRebuildWindowStart: TimeInterval = 0
     private let maxMeshRebuildsPerSecond = 8
 
+    // Live occlusion veto tunables — see docs/superpowers/specs/2026-07-29-live-occlusion-veto-design.md.
+    private let occlusionCenterConeHalfAngleDegrees: Float = 25
+    private let maxOcclusionChecksPerRefresh = 300
+    private let occlusionMarginMeters: Float = 0.05
+    // "At or near" full confidence — avoids a razor-edge float equality check.
+    private let occlusionConfidenceThreshold: Float = 0.999
+
     @Published var qualityPercentage: Double = 0
     @Published var trackingMessage: String?
     @Published var isLiDARSupported: Bool = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
@@ -67,6 +74,12 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         guard isLiDARSupported else { return }
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
+            Self.logger.notice("smoothedSceneDepth enabled")
+        } else {
+            Self.logger.notice("smoothedSceneDepth not supported on this device — occlusion veto disabled")
+        }
         sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
@@ -208,18 +221,77 @@ extension ARSessionManager {
         // Resolve every vertex's confidence under the lock (cheap dictionary
         // reads of a cached float), then release it before building the buffers.
         var confidences = [Float]()
+        var worldPositions = [SIMD3<Float>]()
         confidences.reserveCapacity(vertices.count)
+        worldPositions.reserveCapacity(vertices.count)
         withVoxelGridLock {
             for index in 0..<vertices.count {
                 let local = vertices[index]
                 let world4 = transform * SIMD4<Float>(local, 1)
-                confidences.append(voxelGrid.confidence(at: SIMD3<Float>(world4.x, world4.y, world4.z)))
+                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                worldPositions.append(world)
+                confidences.append(voxelGrid.confidence(at: world))
             }
         }
+
+        applyOcclusionVeto(confidences: &confidences, worldPositions: worldPositions)
 
         let geometry = FogRevealRenderer.makeGeometry(from: meshGeometry, confidences: confidences)
         node.geometry = geometry
         node.renderingOrder = FogRevealRenderer.meshRenderingOrder
+    }
+
+    /// Render-only veto: overrides `confidences` in place (never touches
+    /// `VoxelGrid`) for vertices that are already confirmed but currently have
+    /// something closer between them and the camera. See the design doc for
+    /// why this can't reintroduce the earlier "confirmed area randomly
+    /// re-fogs" bug — nothing stored is ever modified here.
+    private func applyOcclusionVeto(confidences: inout [Float], worldPositions: [SIMD3<Float>]) {
+        guard let frame = sceneView.session.currentFrame, let depthData = frame.smoothedSceneDepth else { return }
+
+        let depthMap = depthData.depthMap
+        guard CVPixelBufferLockBaseAddress(depthMap, .readOnly) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return }
+
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        let viewportSize = CGSize(width: width, height: height)
+
+        let cameraTransform = frame.camera.transform
+        let cameraPosition = SIMD3<Float>(cameraTransform.columns.3.x, cameraTransform.columns.3.y, cameraTransform.columns.3.z)
+        // ARKit's camera looks down its own local -Z axis.
+        let cameraForward = -SIMD3<Float>(cameraTransform.columns.2.x, cameraTransform.columns.2.y, cameraTransform.columns.2.z)
+
+        var checksUsed = 0
+        for index in 0..<confidences.count {
+            guard checksUsed < maxOcclusionChecksPerRefresh else { break }
+            guard confidences[index] >= occlusionConfidenceThreshold else { continue }
+
+            let vertexWorldPosition = worldPositions[index]
+            let vertexDirection = vertexWorldPosition - cameraPosition
+            guard OcclusionVeto.isWithinCenterCone(
+                vertexDirection: vertexDirection,
+                cameraForward: cameraForward,
+                halfAngleDegrees: occlusionCenterConeHalfAngleDegrees
+            ) else { continue }
+
+            checksUsed += 1
+
+            let projected = frame.camera.projectPoint(vertexWorldPosition, orientation: .portrait, viewportSize: viewportSize)
+            let x = Int(projected.x)
+            let y = Int(projected.y)
+            guard x >= 0, x < width, y >= 0, y < height else { continue }
+
+            let rowPointer = baseAddress.advanced(by: y * bytesPerRow)
+            let liveDepth = rowPointer.assumingMemoryBound(to: Float32.self)[x]
+            let vertexDistance = simd_length(vertexDirection)
+
+            if OcclusionVeto.isBlocked(liveDepth: liveDepth, vertexDistance: vertexDistance, marginMeters: occlusionMarginMeters) {
+                confidences[index] = 0
+            }
+        }
     }
 
     private func shouldRebuildMesh(for anchorID: UUID, now: TimeInterval) -> Bool {
