@@ -39,6 +39,12 @@ final class VideoRecorder {
         ]
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = true
+        // ARFrame.capturedImage is always delivered in the camera sensor's native
+        // landscape orientation regardless of how the phone is held. The app is
+        // portrait-only, so rotate the output — this is the same mechanism the
+        // system Camera app uses for "portrait video" (landscape pixel buffer +
+        // a rotation transform in the file's metadata), not a re-encode.
+        input.transform = CGAffineTransform(rotationAngle: .pi / 2)
         let sourcePixelBufferAttributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
