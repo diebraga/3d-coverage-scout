@@ -7,7 +7,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     let voxelGrid = VoxelGrid()
     private let voxelGridLock = NSLock()
     private let frameCaptureLock = NSLock()
-    private let redOverlayRenderer = RedTodoOverlayRenderer()
+    private let coverageOverlayRenderer = FrostedCoverageOverlayRenderer()
     private var frameCaptureHandler: ((CVPixelBuffer, CMTime) -> Void)?
 
     // Touched only from ARSessionDelegate.didUpdate, which ARKit invokes serially.
@@ -38,7 +38,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         sceneView.delegate = self
         sceneView.session.delegate = self
         sceneView.automaticallyUpdatesLighting = true
-        sceneView.scene.rootNode.addChildNode(redOverlayRenderer.rootNode)
+        sceneView.scene.rootNode.addChildNode(coverageOverlayRenderer.rootNode)
     }
 
     func start() {
@@ -140,11 +140,11 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         lastOverlayRefresh = timestamp
 
         let samples = withVoxelGridLock {
-            voxelGrid.incompleteSamples(limit: RedTodoOverlayRenderer.maxVisibleNodes, near: cameraPosition)
+            voxelGrid.incompleteSamples(limit: FrostedCoverageOverlayRenderer.maxVisibleNodes, near: cameraPosition)
         }
 
         DispatchQueue.main.async { [weak self] in
-            self?.redOverlayRenderer.update(samples: samples)
+            self?.coverageOverlayRenderer.update(samples: samples)
         }
     }
 
