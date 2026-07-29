@@ -103,6 +103,13 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     }
 
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        // Evidence for a suspected coordinate-drift issue: if a tracking dip is
+        // ever followed by previously-scanned surfaces re-fogging, this position
+        // (compared against the position logged at the next transition) shows
+        // whether ARKit actually reported a jump.
+        let position = camera.transform.columns.3
+        Self.logger.notice("trackingState=\(String(describing: camera.trackingState)) cameraPosition=(\(position.x, format: .fixed(precision: 3)), \(position.y, format: .fixed(precision: 3)), \(position.z, format: .fixed(precision: 3)))")
+
         let message: String?
         switch camera.trackingState {
         case .normal:
@@ -122,7 +129,6 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         @unknown default:
             message = nil
         }
-        Self.logger.notice("trackingState=\(String(describing: camera.trackingState))")
         DispatchQueue.main.async { [weak self] in
             self?.trackingMessage = message
         }

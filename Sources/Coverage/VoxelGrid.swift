@@ -72,8 +72,32 @@ final class VoxelGrid {
     }
 
     /// 0 = never observed (fully fogged), 1 = confirmed (fully revealed).
+    ///
+    /// Falls back to checking the immediate neighborhood if the exact voxel has
+    /// no data. ARKit's tracked camera pose can shift slightly after a brief
+    /// tracking-quality dip (e.g. recovering from "Too little detail"), which
+    /// can move a physical spot's computed voxel by a cell even though nothing
+    /// about the real scan changed — without this, that reads as "never
+    /// scanned" and previously-revealed surfaces would re-fog. The exact-match
+    /// case (the overwhelming majority of lookups) stays a single O(1) lookup;
+    /// the neighborhood scan only runs on a miss.
     func confidence(at worldPosition: SIMD3<Float>) -> Float {
-        confidenceByVoxel[Self.coordinate(for: worldPosition)] ?? 0
+        let exact = Self.coordinate(for: worldPosition)
+        if let value = confidenceByVoxel[exact] { return value }
+
+        var best: Float = 0
+        for dx: Int32 in -1...1 {
+            for dy: Int32 in -1...1 {
+                for dz: Int32 in -1...1 {
+                    guard dx != 0 || dy != 0 || dz != 0 else { continue }
+                    let neighbor = VoxelCoordinate(x: exact.x + dx, y: exact.y + dy, z: exact.z + dz)
+                    if let value = confidenceByVoxel[neighbor] {
+                        best = max(best, value)
+                    }
+                }
+            }
+        }
+        return best
     }
 
     func incompleteSamples(limit: Int, near cameraPosition: SIMD3<Float>) -> [VoxelOverlaySample] {
