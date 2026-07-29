@@ -1,8 +1,11 @@
 import SwiftUI
 import CoreVideo
 import AudioToolbox
+import os
 
 struct ContentView: View {
+    private static let logger = Logger(subsystem: "com.diebraga.CoverageScout", category: "ContentView")
+
     private enum Screen {
         case idle
         case scanning
@@ -61,6 +64,7 @@ struct ContentView: View {
     }
 
     private func openCamera() {
+        Self.logger.notice("tap openCamera lidarSupported=\(sessionManager.isLiDARSupported)")
         guard sessionManager.isLiDARSupported else { return }
         didSaveVideo = false
         didFailToSaveVideo = false
@@ -69,6 +73,7 @@ struct ContentView: View {
     }
 
     private func toggleRecording() {
+        Self.logger.notice("tap toggleRecording currentlyRecording=\(self.isRecording) isStopping=\(self.isStopping)")
         if isRecording {
             stopRecording()
         } else {
@@ -78,6 +83,7 @@ struct ContentView: View {
 
     private func beginRecording() {
         let scanGeneration = recorderPacer.begin()
+        Self.logger.notice("beginRecording generation=\(scanGeneration)")
         recordingStartedAt = Date()
         recordingElapsedText = "00:00"
         startRecordingTimer()
@@ -124,7 +130,11 @@ struct ContentView: View {
     }
 
     private func stopRecording() {
-        guard !isStopping else { return }
+        guard !isStopping else {
+            Self.logger.notice("stopRecording ignored: already stopping")
+            return
+        }
+        Self.logger.notice("stopRecording begin")
         isStopping = true
         isRecording = false
         recordingTimerTask?.cancel()
@@ -137,12 +147,14 @@ struct ContentView: View {
         // ponytail: one serial queue protects the single recorder; split it only if recording throughput requires it.
         recorderQueue.async {
             recorder.stopRecording { result in
+                Self.logger.notice("recorder.stopRecording completion reached")
                 DispatchQueue.main.async {
                     self.isStopping = false
                     self.screen = .idle
                     self.sessionManager.stop()
                 }
                 guard case .success(let url) = result else {
+                    Self.logger.error("stopRecording failed to produce a file")
                     DispatchQueue.main.async {
                         self.didFailToSaveVideo = true
                     }
@@ -150,11 +162,13 @@ struct ContentView: View {
                 }
                 PhotoSaver.save(videoURL: url) { saveResult in
                     guard case .success = saveResult else {
+                        Self.logger.error("PhotoSaver.save failed")
                         DispatchQueue.main.async {
                             self.didFailToSaveVideo = true
                         }
                         return
                     }
+                    Self.logger.notice("PhotoSaver.save succeeded")
                     try? FileManager.default.removeItem(at: url)
                     DispatchQueue.main.async {
                         self.didSaveVideo = true

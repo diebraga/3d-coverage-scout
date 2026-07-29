@@ -30,7 +30,7 @@ final class RecordingFramePacerTests: XCTestCase {
         XCTAssertNil(tooSoon)
     }
 
-    func test_acceptsNextCadenceFrameWithStableOutputTimestamp() {
+    func test_acceptsNextCadenceFrameWithRealElapsedTimestamp() {
         let pacer = RecordingFramePacer(frameRate: 30)
         let generation = pacer.begin()
 
@@ -40,10 +40,35 @@ final class RecordingFramePacerTests: XCTestCase {
         )
         pacer.completeFrame()
 
-        XCTAssertEqual(
-            pacer.offerFrame(for: generation, sourceTimestamp: CMTime(seconds: 10.04, preferredTimescale: 600)),
-            CMTime(value: 1, timescale: 30)
-        )
+        // Real elapsed time (0.04s) is returned as-is — not snapped to a fixed
+        // frame-count grid — so the saved video's timing matches real motion.
+        // Accuracy wider than 1/600s: CMTime(seconds: 10.04, ...) isn't exactly
+        // representable in binary floating point, so its rounding alone can land
+        // outside a too-tight tolerance — that's a test-input artifact, not a
+        // claim about the pacer's own precision.
+        let accepted = pacer.offerFrame(for: generation, sourceTimestamp: CMTime(seconds: 10.04, preferredTimescale: 600))
+        XCTAssertEqual(accepted?.seconds ?? -1, 0.04, accuracy: 0.01)
+    }
+
+    func test_recordsTrueElapsedTimeAcrossDroppedFrames() {
+        let pacer = RecordingFramePacer(frameRate: 30)
+        let generation = pacer.begin()
+
+        // First frame accepted, deliberately left in-flight (no completeFrame call)
+        // to simulate the recorder queue falling behind.
+        XCTAssertNotNil(pacer.offerFrame(for: generation, sourceTimestamp: CMTime(seconds: 10, preferredTimescale: 600)))
+
+        // Several frames arrive while still in-flight — all must be dropped, not
+        // queued or compressed.
+        XCTAssertNil(pacer.offerFrame(for: generation, sourceTimestamp: CMTime(seconds: 10.1, preferredTimescale: 600)))
+        XCTAssertNil(pacer.offerFrame(for: generation, sourceTimestamp: CMTime(seconds: 10.3, preferredTimescale: 600)))
+
+        pacer.completeFrame()
+
+        // The next accepted frame must carry the TRUE elapsed gap (0.5s), not a
+        // single 1/30s tick — this is the bug this fix addresses.
+        let accepted = pacer.offerFrame(for: generation, sourceTimestamp: CMTime(seconds: 10.5, preferredTimescale: 600))
+        XCTAssertEqual(accepted?.seconds ?? -1, 0.5, accuracy: 0.01)
     }
 
     func test_rejectsWhileFrameIsInFlight() {

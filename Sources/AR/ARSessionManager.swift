@@ -1,8 +1,11 @@
 import ARKit
 import SceneKit
 import Combine
+import os
 
 final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARSessionDelegate {
+    private static let logger = Logger(subsystem: "com.diebraga.CoverageScout", category: "ARSessionManager")
+
     let sceneView = ARSCNView()
     let voxelGrid = VoxelGrid()
     private let voxelGridLock = NSLock()
@@ -42,6 +45,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     }
 
     func start() {
+        Self.logger.notice("session start requested lidarSupported=\(self.isLiDARSupported)")
         guard isLiDARSupported else { return }
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
@@ -49,6 +53,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     }
 
     func stop() {
+        Self.logger.notice("session stop")
         sceneView.session.pause()
     }
 
@@ -101,6 +106,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         @unknown default:
             message = nil
         }
+        Self.logger.notice("trackingState=\(String(describing: camera.trackingState))")
         DispatchQueue.main.async { [weak self] in
             self?.trackingMessage = message
         }
@@ -142,6 +148,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
         let samples = withVoxelGridLock {
             voxelGrid.incompleteSamples(limit: FrostedCoverageOverlayRenderer.maxVisibleNodes, near: cameraPosition)
         }
+        Self.logger.debug("overlay refresh incompleteSamples=\(samples.count) at=\(timestamp, format: .fixed(precision: 3))")
 
         DispatchQueue.main.async { [weak self] in
             self?.coverageOverlayRenderer.update(samples: samples)
