@@ -22,6 +22,10 @@
 	<string>Coverage Scout uses the camera to scan rooms and show live coverage feedback.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Coverage Scout saves your scan recordings to your Photos library.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

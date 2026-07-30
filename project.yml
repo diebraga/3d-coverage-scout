@@ -12,6 +12,8 @@ targets:
       path: Sources/Info.plist
       properties:
         UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         NSCameraUsageDescription: "Coverage Scout uses the camera to scan rooms and show live coverage feedback."
         NSPhotoLibraryAddUsageDescription: "Coverage Scout saves your scan recordings to your Photos library."
     settings:

@@ -17,7 +17,9 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     // enough for iOS's watchdog to SIGKILL the app. Moving it here is a
     // structural fix, not just a mitigation of the VoxelGrid growth bug.
     private let sessionDelegateQueue = DispatchQueue(label: "com.diebraga.CoverageScout.arsession", qos: .userInteractive)
-    private var frameCaptureHandler: ((CVPixelBuffer, CMTime) -> Void)?
+    typealias ARFrameCaptureHandler = (CVPixelBuffer, CMTime, ARFrameMetadataSnapshot) -> Void
+
+    private var frameCaptureHandler: ARFrameCaptureHandler?
 
     // Touched only from ARSessionDelegate.didUpdate, which ARKit invokes serially
     // on sessionDelegateQueue (a serial queue) — still one-at-a-time, just off main.
@@ -43,7 +45,7 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
     @Published var trackingMessage: String?
     @Published var isLiDARSupported: Bool = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
 
-    var onFrameCaptured: ((CVPixelBuffer, CMTime) -> Void)? {
+    var onFrameCaptured: ARFrameCaptureHandler? {
         get {
             frameCaptureLock.lock()
             defer { frameCaptureLock.unlock() }
@@ -84,7 +86,6 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let timestamp = frame.timestamp.isNaN ? CMTime.zero : CMTime(seconds: frame.timestamp, preferredTimescale: 600)
-        onFrameCaptured?(frame.capturedImage, timestamp)
         updateDepthSnapshot(from: frame)
 
         let cameraPosition = SIMD3<Float>(
@@ -102,9 +103,21 @@ final class ARSessionManager: NSObject, ObservableObject, ARSCNViewDelegate, ARS
             recordObservations(for: meshAnchor, cameraPosition: cameraPosition)
         }
 
+        let qualityPercentage = withVoxelGridLock { voxelGrid.qualityPercentage }
+        let metadataSnapshot = ARFrameMetadataSnapshot(
+            arkitTimestampSeconds: frame.timestamp,
+            cameraTransform: frame.camera.transform,
+            intrinsics: frame.camera.intrinsics,
+            imageResolution: frame.camera.imageResolution,
+            trackingState: frame.camera.trackingState,
+            scanQuality: qualityPercentage,
+            sceneDepthEnabled: frame.sceneDepth != nil
+        )
+        onFrameCaptured?(frame.capturedImage, timestamp, metadataSnapshot)
+
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.qualityPercentage = self.withVoxelGridLock { self.voxelGrid.qualityPercentage }
+            self.qualityPercentage = qualityPercentage
         }
     }
 

@@ -38,8 +38,9 @@ The goal is simple: reduce rescans and improve the raw footage that downstream
 - Shows incomplete or weakly captured areas in the live preview.
 - Lets well-covered surfaces fade back to the normal camera image.
 - Records a clean `.mov` video without baking the overlay into the footage.
-- Saves the video to Photos so it can be transferred into the reconstruction
-  pipeline.
+- Exports a paired Files-app folder containing `scan.mov` and
+  `scan_metadata.json`.
+- Also saves the video to Photos as a convenience.
 
 ## What It Does Not Do
 
@@ -90,6 +91,68 @@ Coverage Scout uses Apple's native AR stack:
 
 The overlay exists only on screen. The saved video remains clean because the
 reconstruction pipeline needs camera footage, not UI graphics.
+
+## Files Export And Metadata
+
+When a recording finishes, Coverage Scout writes a paired export folder into
+the app's Documents directory, visible in the iOS Files app under
+`On My iPhone -> Coverage Scout`:
+
+```text
+scan_2026-07-30_191245/
+  scan.mov
+  scan_metadata.json
+```
+
+`scan.mov` is the clean camera video. `scan_metadata.json` is a sidecar with
+ARKit tracking context for the same accepted video frames:
+
+```json
+{
+  "schema_version": 1,
+  "app": "Coverage Scout",
+  "created_at": "2026-07-30T19:12:45Z",
+  "arkit_world_units": "meters",
+  "video": {
+    "filename": "scan.mov",
+    "width": 1920,
+    "height": 1080,
+    "frame_rate": 30,
+    "duration_seconds": 42.5
+  },
+  "capture": {
+    "device_supports_lidar": true,
+    "scene_reconstruction": "mesh",
+    "scene_depth_enabled": true,
+    "voxel_size_meters": 0.1,
+    "scan_quality_final": 78.4
+  },
+  "frames": [
+    {
+      "video_timestamp_seconds": 0.0,
+      "arkit_timestamp_seconds": 12345.678,
+      "camera_transform": [
+        [1.0, 0.0, 0.0, 0.12],
+        [0.0, 1.0, 0.0, 1.43],
+        [0.0, 0.0, 1.0, -0.55],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "intrinsics": [
+        [1420.0, 0.0, 960.0],
+        [0.0, 1420.0, 540.0],
+        [0.0, 0.0, 1.0]
+      ],
+      "image_resolution": [1920, 1080],
+      "tracking_state": "normal",
+      "scan_quality": 42.1
+    }
+  ]
+}
+```
+
+The metadata is not used to replace COLMAP. Its first downstream uses are
+capture diagnostics, frame selection, and giving the reconstruction pipeline
+extra context about ARKit pose quality and camera intrinsics.
 
 ## Coverage Model
 
@@ -143,6 +206,7 @@ as part of the denominator.
 - simd geometry math
 - AVFoundation / `AVAssetWriter`
 - Photos framework
+- Files app document sharing
 - XCTest
 - XcodeGen
 
@@ -191,10 +255,11 @@ hardware.
 3. Walk the room slowly while watching the live coverage feedback.
 4. Revisit weakly covered areas until the important surfaces are confirmed.
 5. Stop recording.
-6. Let the app save the clean `.mov` to Photos.
-7. Transfer the video to the reconstruction machine.
+6. Let the app save the paired Files export folder.
+7. Transfer both `scan.mov` and `scan_metadata.json` to the reconstruction machine.
 8. Drop the video into the reconstruction pipeline's room input folder.
-9. Run the normal reconstruction process.
+9. Keep the JSON beside the video for diagnostics and future metadata-aware processing.
+10. Run the normal reconstruction process.
 
 ## More Detail
 

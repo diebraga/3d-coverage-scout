@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var recordingElapsedText: String?
     @State private var recordingTimerTask: Task<Void, Never>?
     private let recorder = VideoRecorder()
+    private let metadataRecorder = ScanMetadataRecorder()
     private let recorderQueue = DispatchQueue(label: "coverage-scout.recorder")
     private let recorderPacer = RecordingFramePacer(frameRate: 30)
 
@@ -40,7 +41,7 @@ struct ContentView: View {
         }
         .overlay(alignment: .top) {
             if didSaveVideo {
-                Label("Video saved", systemImage: "checkmark.circle.fill")
+                Label("Scan saved to Files", systemImage: "checkmark.circle.fill")
                     .padding(8)
                     .background(.black.opacity(0.7))
                     .foregroundColor(.white)
@@ -48,7 +49,7 @@ struct ContentView: View {
                     .padding(.top, 12)
             }
             if didFailToSaveVideo {
-                Label("Video could not be saved", systemImage: "exclamationmark.circle.fill")
+                Label("Scan could not be saved", systemImage: "exclamationmark.circle.fill")
                     .padding(8)
                     .background(.black.opacity(0.7))
                     .foregroundColor(.white)
@@ -83,12 +84,13 @@ struct ContentView: View {
 
     private func beginRecording() {
         let scanGeneration = recorderPacer.begin()
+        let scanCreatedAt = Date()
         Self.logger.notice("beginRecording generation=\(scanGeneration)")
-        recordingStartedAt = Date()
+        recordingStartedAt = scanCreatedAt
         recordingElapsedText = "00:00"
         startRecordingTimer()
 
-        sessionManager.onFrameCaptured = { pixelBuffer, timestamp in
+        sessionManager.onFrameCaptured = { pixelBuffer, timestamp, metadataSnapshot in
             guard let outputTimestamp = self.recorderPacer.offerFrame(for: scanGeneration, sourceTimestamp: timestamp) else { return }
             self.recorderQueue.async {
                 defer { self.recorderPacer.completeFrame() }
@@ -97,6 +99,13 @@ struct ContentView: View {
                     let height = CVPixelBufferGetHeight(pixelBuffer)
                     do {
                         _ = try self.recorder.startRecording(width: width, height: height)
+                        self.metadataRecorder.start(
+                            videoFilename: "scan.mov",
+                            width: width,
+                            height: height,
+                            frameRate: 30,
+                            createdAt: scanCreatedAt
+                        )
                     } catch {
                         DispatchQueue.main.async {
                             self.didFailToSaveVideo = true
@@ -105,6 +114,10 @@ struct ContentView: View {
                     }
                 }
                 self.recorder.appendFrame(pixelBuffer, timestamp: outputTimestamp)
+                self.metadataRecorder.append(
+                    frame: metadataSnapshot.frameMetadata(videoTimestamp: outputTimestamp),
+                    sceneDepthEnabled: metadataSnapshot.sceneDepthEnabled
+                )
             }
         }
         isRecording = true
@@ -160,22 +173,38 @@ struct ContentView: View {
                     }
                     return
                 }
-                PhotoSaver.save(videoURL: url) { saveResult in
-                    guard case .success = saveResult else {
-                        Self.logger.error("PhotoSaver.save failed")
-                        DispatchQueue.main.async {
-                            self.didFailToSaveVideo = true
-                        }
-                        return
-                    }
-                    Self.logger.notice("PhotoSaver.save succeeded")
-                    try? FileManager.default.removeItem(at: url)
+                do {
+                    let metadata = try self.metadataRecorder.encodedDocument(
+                        durationSeconds: self.metadataRecorder.durationSeconds,
+                        scanQualityFinal: self.sessionManager.qualityPercentage
+                    )
+                    let export = try ScanFileExporter.export(
+                        videoURL: url,
+                        metadataData: metadata,
+                        createdAt: self.metadataRecorder.startedAt
+                    )
+                    Self.logger.notice("ScanFileExporter.export succeeded folder=\(export.folderURL.lastPathComponent)")
                     DispatchQueue.main.async {
                         self.didSaveVideo = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                             self.didSaveVideo = false
                         }
                     }
+                } catch {
+                    Self.logger.error("ScanFileExporter.export failed error=\(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.didFailToSaveVideo = true
+                    }
+                    return
+                }
+
+                PhotoSaver.save(videoURL: url) { saveResult in
+                    if case .failure = saveResult {
+                        Self.logger.error("PhotoSaver.save failed")
+                    } else {
+                        Self.logger.notice("PhotoSaver.save succeeded")
+                    }
+                    try? FileManager.default.removeItem(at: url)
                 }
             }
         }

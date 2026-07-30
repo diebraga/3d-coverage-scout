@@ -54,9 +54,10 @@ intended to feel like a Scaniverse-style capture overlay: the user can walk the
 room and visually chase the remaining incomplete areas until the scene has
 better coverage.
 
-The saved output is still just a plain `.mov` video. The overlay is never
-baked into the recording. That is important because the downstream
-reconstruction pipeline needs clean camera frames, not UI graphics.
+The saved output includes a plain `.mov` video plus a `scan_metadata.json`
+sidecar. The overlay is never baked into the recording. That is important
+because the downstream reconstruction pipeline needs clean camera frames, not
+UI graphics.
 
 ## Why It Improves Reconstruction Quality
 
@@ -120,7 +121,9 @@ At a high level:
 5. The app classifies how well each voxel has been covered.
 6. The live preview renders incomplete areas as guidance.
 7. The video recorder writes clean camera frames to a `.mov` file.
-8. The saved video goes into the existing reconstruction pipeline.
+8. The metadata recorder writes ARKit pose, intrinsics, tracking state, and
+   scan-quality context to `scan_metadata.json`.
+9. The paired folder goes into the existing reconstruction pipeline.
 
 ## Coverage Model
 
@@ -203,10 +206,40 @@ The video path is:
 2. The app passes the pixel buffer to `AVAssetWriter`.
 3. Frames are paced to a stable recording rate.
 4. The output is written as H.264 `.mov`.
-5. The finished video is saved to the Photos library.
+5. The finished video is copied to a timestamped Files-app export folder.
+6. The same video is also saved to the Photos library as a convenience.
 
 The overlay is not composited into the recording. The saved file is suitable
 for the existing reconstruction workflow.
+
+The paired export folder is visible in the iOS Files app under
+`On My iPhone -> Coverage Scout` and uses this shape:
+
+```text
+scan_2026-07-30_191245/
+  scan.mov
+  scan_metadata.json
+```
+
+`scan_metadata.json` has one entry per accepted recorded frame, not one entry
+per raw ARKit callback. That keeps the sidecar aligned with the video that the
+reconstruction pipeline will actually process.
+
+The sidecar stores:
+
+- ARKit camera transform in meters;
+- camera intrinsics;
+- image resolution;
+- ARKit timestamp;
+- matching video timestamp;
+- tracking state;
+- scan quality at that frame;
+- final scan quality and capture settings.
+
+This metadata is intended first for reconstruction diagnostics and frame
+selection. Feeding ARKit poses directly into COLMAP is future pipeline work,
+because ARKit and COLMAP have different coordinate conventions and COLMAP's
+scale/origin behavior needs careful handling.
 
 ## Technologies Used
 
@@ -223,6 +256,8 @@ Coverage Scout is built with Apple's native AR and media stack:
 - AVFoundation / AVAssetWriter for writing clean `.mov` video.
 - Photos framework for saving the finished recording to the user's photo
   library.
+- App Documents / Files sharing for paired `scan.mov` + `scan_metadata.json`
+  export.
 - XCTest for pure coverage, voxel, pacing, and recording logic tests.
 - XcodeGen for generating the Xcode project from `project.yml`.
 
@@ -290,10 +325,11 @@ The intended user workflow is:
 3. Walk the room slowly while watching the coverage overlay.
 4. Revisit marked or fogged areas until important surfaces are confirmed.
 5. Stop recording.
-6. Let the app save the clean `.mov` to Photos.
-7. AirDrop or transfer the video to the Mac.
+6. Let the app save the paired Files export folder.
+7. AirDrop or transfer both `scan.mov` and `scan_metadata.json` to the Mac.
 8. Drop the video into the reconstruction project's room input folder.
-9. Run the normal reconstruction pipeline.
+9. Keep the JSON beside the video for diagnostics and future metadata-aware processing.
+10. Run the normal reconstruction pipeline.
 
 Coverage Scout deliberately preserves this simple handoff. It does not require
 accounts, cloud sync, model hosting, or a new viewer to be useful.
@@ -335,4 +371,3 @@ The practical signs are:
 
 The app improves reconstruction not by doing more processing, but by improving
 what the processing receives.
-
