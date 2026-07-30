@@ -1,5 +1,7 @@
 # Coverage Scout
 
+![Coverage Scout live scan coverage demo](docs/assets/coverage-scout-demo.gif)
+
 Coverage Scout is a native iOS app for LiDAR-equipped iPhones that helps record
 better source footage for 3D reconstruction. It gives live scan-coverage
 feedback while a room is being captured, so the user can see which surfaces
@@ -198,4 +200,3 @@ hardware.
 
 The longer rationale and implementation notes are in
 [`docs/why-coverage-scout.md`](docs/why-coverage-scout.md).
-
