@@ -214,16 +214,17 @@ extension ARSessionManager {
         let meshGeometry = meshAnchor.geometry
         let vertices = meshGeometry.vertices
         let transform = meshAnchor.transform
+        let sampleIndices = FogRevealRenderer.sampleIndices(vertexCount: vertices.count)
 
-        // Resolve every vertex's confidence under the lock (cheap dictionary
-        // reads of a cached float), then release it before building the buffers.
+        // Resolve only the sampled preview vertices under the lock, then release
+        // it before depth checks and SceneKit buffer creation.
         let depthSnapshot = withDepthSnapshotLock { latestDepthSnapshot }
         var worldPositions = [SIMD3<Float>]()
         var confidences = [Float]()
-        worldPositions.reserveCapacity(vertices.count)
-        confidences.reserveCapacity(vertices.count)
+        worldPositions.reserveCapacity(sampleIndices.count)
+        confidences.reserveCapacity(sampleIndices.count)
         withVoxelGridLock {
-            for index in 0..<vertices.count {
+            for index in sampleIndices {
                 let local = vertices[index]
                 let world4 = transform * SIMD4<Float>(local, 1)
                 let world = SIMD3<Float>(world4.x, world4.y, world4.z)
@@ -233,7 +234,12 @@ extension ARSessionManager {
         }
         let visible = visibilityMask(for: worldPositions, snapshot: depthSnapshot)
 
-        let geometry = FogRevealRenderer.makeGeometry(from: meshGeometry, confidences: confidences, visible: visible)
+        let geometry = FogRevealRenderer.makeGeometry(
+            from: meshGeometry,
+            confidences: confidences,
+            visible: visible,
+            sampleIndices: sampleIndices
+        )
         node.geometry = geometry
         node.renderingOrder = FogRevealRenderer.meshRenderingOrder
     }
@@ -276,8 +282,7 @@ extension ARSessionManager {
         guard let baseAddress = CVPixelBufferGetBaseAddress(snapshot.depthMap) else { return visible }
         let floatsPerRow = CVPixelBufferGetBytesPerRow(snapshot.depthMap) / MemoryLayout<Float32>.stride
         let depths = baseAddress.assumingMemoryBound(to: Float32.self)
-        let stride = FogRevealRenderer.samplingStride(vertexCount: worldPositions.count)
-        for index in Swift.stride(from: 0, to: worldPositions.count, by: stride) {
+        for index in worldPositions.indices {
             guard let pixel = OcclusionVeto.depthPixel(
                 for: worldPositions[index],
                 cameraTransform: snapshot.cameraTransform,

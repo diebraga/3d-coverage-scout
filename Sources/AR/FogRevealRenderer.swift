@@ -6,29 +6,36 @@ import UIKit
 /// keep the camera readable; unlike mesh faces, they cannot blanket objects.
 enum FogRevealRenderer {
     static let meshRenderingOrder = 0
-    private static let maximumPointsPerAnchor = 1_500
+    static let maximumPointsPerAnchor = 500
 
     static func samplingStride(vertexCount: Int) -> Int {
-        max(1, vertexCount / maximumPointsPerAnchor)
+        guard vertexCount > maximumPointsPerAnchor else { return 1 }
+        return (vertexCount + maximumPointsPerAnchor - 1) / maximumPointsPerAnchor
+    }
+
+    static func sampleIndices(vertexCount: Int) -> [Int] {
+        guard vertexCount > 0 else { return [] }
+        let stride = samplingStride(vertexCount: vertexCount)
+        return Array(Swift.stride(from: 0, to: vertexCount, by: stride))
     }
 
     /// Builds a bounded point preview for one mesh anchor. `confidences` is
     /// resolved by the caller so the voxel-grid lock only covers dictionary reads.
-    static func makeGeometry(from meshGeometry: ARMeshGeometry, confidences: [Float], visible: [Bool]? = nil) -> SCNGeometry {
+    static func makeGeometry(from meshGeometry: ARMeshGeometry, confidences: [Float], visible: [Bool]? = nil, sampleIndices: [Int]? = nil) -> SCNGeometry {
         let vertices = meshGeometry.vertices
-        let stride = samplingStride(vertexCount: vertices.count)
+        let indices = sampleIndices ?? Self.sampleIndices(vertexCount: vertices.count)
         let baseAddress = vertices.buffer.contents()
 
         var positions = [SIMD3<Float>]()
         var colors = [SCNVector4]()
-        positions.reserveCapacity(maximumPointsPerAnchor)
-        colors.reserveCapacity(maximumPointsPerAnchor)
-        for index in Swift.stride(from: 0, to: vertices.count, by: stride) {
-            guard visible?[index] ?? true else { continue }
-            let confidence = index < confidences.count ? confidences[index] : 0
+        positions.reserveCapacity(indices.count)
+        colors.reserveCapacity(indices.count)
+        for (sampleOffset, vertexIndex) in indices.enumerated() {
+            guard visible?[sampleOffset] ?? true else { continue }
+            let confidence = sampleOffset < confidences.count ? confidences[sampleOffset] : 0
             let alpha = ScanPreviewStyle.opacity(for: confidence)
             guard alpha > 0 else { continue }
-            let pointer = baseAddress.advanced(by: vertices.offset + vertices.stride * index)
+            let pointer = baseAddress.advanced(by: vertices.offset + vertices.stride * vertexIndex)
             positions.append(pointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
             colors.append(SCNVector4(1, 0.05, 0.05, alpha))
         }
